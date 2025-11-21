@@ -8,7 +8,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from langchain_community.document_loaders import PyPDFLoader, UnstructuredFileLoader
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_unstructured import UnstructuredLoader
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
     # Handle DOCX files
     if file_type == "docx":
         try:
-            loader = UnstructuredFileLoader(str(file_path))
+            loader = UnstructuredLoader(str(file_path))
             docs = loader.load()
             text_content = "\n\n".join([doc.page_content for doc in docs])
             logger.debug(f"Extracted content from DOCX: {file_path.name}")

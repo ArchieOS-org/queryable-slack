@@ -104,8 +104,11 @@ def discover_conversations(export_path: Path) -> Dict[str, str]:
             conversations[dir_name] = "mpim"
             continue
 
-        # Check if it looks like a DM directory (starts with D)
-        if dir_name.startswith("D") and len(dir_name) > 1:
+        # Last-resort fallback: Check if it looks like a DM directory
+        # This regex matches Slack DM IDs: starts with 'D' followed by 8+ alphanumeric characters
+        # Only used when metadata files are missing or corrupted
+        import re
+        if re.match(r"^D[A-Z0-9]{8,}$", dir_name):
             conversations[dir_name] = "dm"
             continue
 
