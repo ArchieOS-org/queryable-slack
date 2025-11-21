@@ -278,7 +278,7 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = Path("./
         logger.info(f"Stored {len(sessions)} sessions in ChromaDB at {db_path}")
 
     except Exception as e:
-        logger.error(f"Failed to store sessions in ChromaDB: {e}")
+        logger.exception(f"Failed to store sessions in ChromaDB: {e}")
         raise
 
 
