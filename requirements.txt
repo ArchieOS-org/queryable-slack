@@ -1,0 +1,28 @@
+# Core dependencies for Conductor
+# Python 3.11, 3.12, or 3.13 required (Python 3.14 not supported by ChromaDB)
+
+# Data validation and models
+pydantic>=2.0,<3.0
+
+# Vector database
+chromadb>=0.4.0
+
+# LLM SDK
+anthropic>=0.34.0
+
+# Document loaders
+langchain-community>=0.4.1
+langchain-unstructured>=0.1.6
+
+# File parsing (used by langchain-community)
+unstructured>=0.15.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# ChromaDB dependencies (installed automatically, but listed for reference)
+# sentence-transformers>=2.2.2
+# hnswlib>=0.7.0
+# duckdb>=0.7.1
+# clickhouse-connect>=0.5.7
+
