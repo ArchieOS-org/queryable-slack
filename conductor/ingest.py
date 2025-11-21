@@ -303,7 +303,7 @@ def main(export_path: Path) -> None:
     try:
         user_map = load_users(export_path)
     except Exception as e:
-        logger.error(f"Failed to load users: {e}")
+        logger.exception(f"Failed to load users: {e}")
         raise
 
     # Step 2: Conversation Discovery
