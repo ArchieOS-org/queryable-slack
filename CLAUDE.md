@@ -23,7 +23,7 @@ queryable-slack/
 ├── CLAUDE.md             # This file
 └── .conductor/
     └── manado/
-        └── promt.xml      # Detailed specification
+        └── prompt.xml     # Detailed specification
 ```
 
 ## Core Principles
