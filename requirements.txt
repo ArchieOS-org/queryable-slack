@@ -12,7 +12,7 @@ anthropic>=0.34.0
 
 # Document loaders
 langchain-community>=0.4.1
-langchain-unstructured>=0.1.6
+# langchain-unstructured>=0.1.6  # Temporarily disabled due to dependency conflict
 
 # File parsing (used by langchain-community)
 unstructured>=0.15.0

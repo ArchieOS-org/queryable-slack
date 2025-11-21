@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -158,6 +159,8 @@ def enrich_session_with_files(
 
     enriched_parts = [session.transcript]
     files_processed = 0
+    files_skipped = 0
+    files_error = 0
 
     for msg in messages:
         if not msg.files:
@@ -182,7 +185,8 @@ def enrich_session_with_files(
                 matching_files = list(attachments_dir.glob(f"{file_id}*"))
 
             if not matching_files:
-                logger.debug(f"Attachment not found for file {file_id} in {conversation_dir.name}")
+                logger.debug(f"Attachment not found for file {file_id} ({filename}) in {conversation_dir.name}")
+                files_skipped += 1
                 continue
 
             attachment_file = matching_files[0]
@@ -211,11 +215,19 @@ def enrich_session_with_files(
                     enriched_parts.append(file_content)
                     enriched_parts.append("<<< ATTACHMENT END >>>")
                     files_processed += 1
+                    logger.debug(f"  ✅ Processed attachment: {filename}")
+                else:
+                    files_skipped += 1
+                    logger.debug(f"  ⏭️  Skipped attachment: {filename}")
             except Exception as e:
-                logger.warning(f"Failed to process attachment {filename}: {e}")
+                logger.warning(f"  ⚠️  Failed to process attachment {filename}: {e}")
                 enriched_parts.append(f"<<< ATTACHMENT START: {filename} >>>")
                 enriched_parts.append(f"[ERROR: Could not parse file {filename}]")
                 enriched_parts.append("<<< ATTACHMENT END >>>")
+                files_error += 1
+
+    if files_processed > 0:
+        logger.debug(f"  File enrichment: {files_processed} processed, {files_skipped} skipped, {files_error} errors")
 
     enriched_transcript = "\n\n".join(enriched_parts)
 
@@ -228,7 +240,7 @@ def enrich_session_with_files(
         conversation_type=session.conversation_type,
         transcript=session.transcript,
         enriched_transcript=enriched_transcript,
-        file_count=session.file_count,
+        file_count=files_processed,
         message_count=session.message_count,
     )
 
@@ -242,25 +254,36 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = Path("./
         db_path: Path to ChromaDB persistent storage directory
     """
     if not sessions:
-        logger.info("No sessions to store")
+        logger.info("⚠️  No sessions to store")
+        print("⚠️  No sessions to store")
         return
 
     try:
+        logger.info(f"💾 Initializing ChromaDB at {db_path}")
+        print(f"💾 Initializing ChromaDB database...")
+        
         # Initialize persistent ChromaDB client
         client = chromadb.PersistentClient(path=str(db_path))
 
         # Get or create collection (idempotent)
+        logger.info("📚 Creating/accessing collection 'conductor_sessions'...")
         collection = client.get_or_create_collection(
             name="conductor_sessions",
             metadata={"description": "Real Estate Slack conversation sessions"},
         )
 
         # Prepare data for upsert
+        logger.info(f"📝 Preparing {len(sessions)} sessions for storage...")
+        print(f"📝 Preparing {len(sessions)} sessions for vector storage...")
         ids = []
         documents = []
         metadatas = []
 
-        for session in sessions:
+        for idx, session in enumerate(sessions, 1):
+            if idx % 10 == 0 or idx == len(sessions):
+                logger.debug(f"  Preparing session {idx}/{len(sessions)}: {session.channel_name}")
+                print(f"  Processing session {idx}/{len(sessions)}...", end="\r")
+            
             ids.append(session.session_id)
             documents.append(session.enriched_transcript)
             metadatas.append(
@@ -275,17 +298,23 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = Path("./
                 }
             )
 
+        print()  # New line after progress
+        logger.info(f"🔢 Generating embeddings and storing in ChromaDB...")
+        print(f"🔢 Generating embeddings (this may take a moment)...")
+        
         # Upsert to ChromaDB (idempotent)
         collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
 
-        logger.info(f"Stored {len(sessions)} sessions in ChromaDB at {db_path}")
+        logger.info(f"✅ Stored {len(sessions)} sessions in ChromaDB at {db_path}")
+        print(f"✅ Stored {len(sessions)} sessions in ChromaDB")
 
     except Exception as e:
-        logger.exception(f"Failed to store sessions in ChromaDB: {e}")
+        logger.exception(f"❌ Failed to store sessions in ChromaDB: {e}")
+        print(f"❌ Error storing sessions: {e}")
         raise
 
 
-def main(export_path: Path) -> None:
+def main(export_path: Path, db_path: Optional[Path] = None) -> None:
     """
     Main ingestion entry point.
 
@@ -298,55 +327,113 @@ def main(export_path: Path) -> None:
 
     Args:
         export_path: Path to Slack export directory
+        db_path: Optional path to ChromaDB directory (defaults to timestamped conductor_db)
     """
-    logger.info(f"Starting ingestion from {export_path}")
+    start_time = datetime.now()
+    timestamp = start_time.strftime("%Y%m%d_%H%M%S")
+    
+    # Add datestamp to database path if not provided
+    if db_path is None:
+        db_path = Path(f"./conductor_db_{timestamp}")
+    
+    logger.info("=" * 80)
+    logger.info("INGESTION PIPELINE")
+    logger.info("=" * 80)
+    logger.info(f"📂 Source export: {export_path}")
+    logger.info(f"💾 Database path: {db_path}")
+    logger.info(f"⏱️  Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 80)
+    print(f"\n🚀 Starting ingestion pipeline...")
+    print(f"📂 Source: {export_path}")
+    print(f"💾 Database: {db_path.name}")
+    print(f"⏱️  Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     # Step 1: Identity Mapping
-    logger.info("Step 1: Identity Mapping")
+    logger.info("=" * 80)
+    logger.info("STEP 1: Identity Mapping")
+    logger.info("=" * 80)
+    print("📋 Step 1/5: Identity Mapping...")
     try:
+        logger.info("Loading user mappings from users.json...")
         user_map = load_users(export_path)
+        logger.info(f"✅ Loaded {len(user_map.users)} users")
+        print(f"✅ Loaded {len(user_map.users)} users")
     except Exception as e:
-        logger.exception(f"Failed to load users: {e}")
+        logger.exception(f"❌ Failed to load users: {e}")
+        print(f"❌ Error loading users: {e}")
         raise
 
     # Step 2: Conversation Discovery
-    logger.info("Step 2: Conversation Discovery")
+    logger.info("=" * 80)
+    logger.info("STEP 2: Conversation Discovery")
+    logger.info("=" * 80)
+    print("\n🔍 Step 2/5: Conversation Discovery...")
     try:
+        logger.info("Scanning export directory for conversations...")
         conversations = discover_conversations(export_path)
+        logger.info(f"✅ Discovered {len(conversations)} conversations")
+        print(f"✅ Discovered {len(conversations)} conversations")
+        
+        # Log conversation breakdown
+        conv_types = {}
+        for conv_type in conversations.values():
+            conv_types[conv_type] = conv_types.get(conv_type, 0) + 1
+        for conv_type, count in conv_types.items():
+            logger.info(f"  - {conv_type}: {count}")
+            print(f"   {conv_type}: {count}")
     except Exception as e:
-        logger.error(f"Failed to discover conversations: {e}")
+        logger.error(f"❌ Failed to discover conversations: {e}")
+        print(f"❌ Error discovering conversations: {e}")
         raise
 
     # Step 3 & 4: Process each conversation (Timeline, Sessionization, File Enrichment)
-    logger.info("Step 3 & 4: Timeline, Sessionization, and File Enrichment")
+    logger.info("=" * 80)
+    logger.info("STEP 3 & 4: Timeline, Sessionization, and File Enrichment")
+    logger.info("=" * 80)
+    print(f"\n📝 Step 3-4/5: Processing conversations...")
     all_sessions: List[Session] = []
+    total_messages = 0
+    total_files = 0
 
-    for dir_name, conversation_type in conversations.items():
+    for idx, (dir_name, conversation_type) in enumerate(conversations.items(), 1):
         conversation_dir = export_path / dir_name
+        logger.info(f"[{idx}/{len(conversations)}] Processing: {dir_name} ({conversation_type})")
+        print(f"  [{idx}/{len(conversations)}] Processing: {dir_name}...")
 
         if not conversation_dir.exists():
-            logger.warning(f"Conversation directory not found: {conversation_dir}")
+            logger.warning(f"⚠️  Conversation directory not found: {conversation_dir}")
+            print(f"     ⚠️  Directory not found, skipping")
             continue
 
         try:
             # Load messages from conversation directory
+            logger.debug(f"  Loading messages from {dir_name}...")
             messages = load_messages_from_directory(conversation_dir)
+            total_messages += len(messages)
 
             if not messages:
-                logger.debug(f"No messages found in {dir_name}")
+                logger.debug(f"  No messages found in {dir_name}")
+                print(f"     ℹ️  No messages found, skipping")
                 continue
+
+            logger.info(f"  Loaded {len(messages)} messages")
+            print(f"     📨 Loaded {len(messages)} messages")
 
             # Get channel name for session
             channel_name = get_channel_name_for_session(dir_name, conversation_type)
 
             # Sessionize messages
+            logger.debug(f"  Sessionizing messages...")
             sessions = sessionize_messages(messages, channel_name, conversation_type, user_map)
+            logger.info(f"  Created {len(sessions)} sessions")
+            print(f"     📦 Created {len(sessions)} sessions")
 
             # Enrich each session with file content
+            logger.debug(f"  Enriching sessions with file content...")
             enriched_sessions = []
-            for session in sessions:
+            files_in_conversation = 0
+            for session_idx, session in enumerate(sessions, 1):
                 # Get messages for this session (by matching timestamps)
-                # Use a small epsilon to handle floating point precision issues
                 session_start_ts = session.start_time.timestamp()
                 session_end_ts = session.end_time.timestamp()
                 session_messages = [
@@ -356,24 +443,55 @@ def main(export_path: Path) -> None:
                 ]
                 enriched_session = enrich_session_with_files(session, session_messages, conversation_dir)
                 enriched_sessions.append(enriched_session)
+                files_in_conversation += enriched_session.file_count
+                
+                if session_idx % 5 == 0 or session_idx == len(sessions):
+                    logger.debug(f"    Enriched {session_idx}/{len(sessions)} sessions")
 
+            total_files += files_in_conversation
             all_sessions.extend(enriched_sessions)
-            logger.info(f"Processed {dir_name}: {len(enriched_sessions)} sessions")
+            logger.info(f"  ✅ Processed {dir_name}: {len(enriched_sessions)} sessions, {files_in_conversation} files")
+            print(f"     ✅ {len(enriched_sessions)} sessions, {files_in_conversation} files processed")
 
         except Exception as e:
-            logger.error(f"Failed to process conversation {dir_name}: {e}")
+            logger.error(f"  ❌ Failed to process conversation {dir_name}: {e}")
+            print(f"     ❌ Error processing: {e}")
             # Continue processing other conversations - don't stop on errors
             continue
 
+    logger.info(f"📊 Summary: {len(all_sessions)} sessions, {total_messages} messages, {total_files} files")
+    print(f"\n📊 Summary: {len(all_sessions)} sessions, {total_messages} messages, {total_files} files")
+
     # Step 5: Vectorization & Storage
-    logger.info(f"Step 5: Vectorization & Storage ({len(all_sessions)} sessions)")
+    logger.info("=" * 80)
+    logger.info(f"STEP 5: Vectorization & Storage ({len(all_sessions)} sessions)")
+    logger.info("=" * 80)
+    print(f"\n💾 Step 5/5: Vectorization & Storage...")
     try:
-        store_sessions_in_chromadb(all_sessions)
+        store_sessions_in_chromadb(all_sessions, db_path)
     except Exception as e:
-        logger.error(f"Failed to store sessions in ChromaDB: {e}")
+        logger.error(f"❌ Failed to store sessions in ChromaDB: {e}")
+        print(f"❌ Error storing sessions: {e}")
         raise
 
-    logger.info(f"Ingestion complete! Processed {len(all_sessions)} sessions")
+    end_time = datetime.now()
+    duration = end_time - start_time
+    logger.info("=" * 80)
+    logger.info("✅ INGESTION COMPLETE!")
+    logger.info(f"📊 Processed {len(all_sessions)} sessions")
+    logger.info(f"📨 Total messages: {total_messages}")
+    logger.info(f"📎 Total files: {total_files}")
+    logger.info(f"💾 Database location: {db_path}")
+    logger.info(f"⏱️  Duration: {duration}")
+    logger.info(f"⏱️  Completed at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 80)
+    print(f"\n✅ Ingestion complete!")
+    print(f"📊 Sessions: {len(all_sessions)}")
+    print(f"📨 Messages: {total_messages}")
+    print(f"📎 Files: {total_files}")
+    print(f"💾 Database: {db_path.name}")
+    print(f"⏱️  Duration: {duration}")
+    print(f"⏱️  Completed: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
 if __name__ == "__main__":

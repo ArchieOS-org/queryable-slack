@@ -7,6 +7,7 @@ of conversations or messages before running on the full dataset.
 
 import logging
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -46,17 +47,25 @@ def create_trial_export(
         shutil.rmtree(trial_export)
 
     trial_export.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Creating trial export at {trial_export}")
+    logger.info(f"📁 Creating trial export at {trial_export}")
+    print(f"📁 Creating trial export directory: {trial_export.name}")
 
     # Copy essential metadata files
     essential_files = ["users.json", "channels.json", "dms.json", "mpims.json", "groups.json"]
+    logger.info(f"📋 Copying {len(essential_files)} essential metadata files...")
+    print(f"📋 Copying metadata files...")
     for filename in essential_files:
         source_file = source_export / filename
         if source_file.exists():
             shutil.copy2(source_file, trial_export / filename)
             logger.debug(f"Copied {filename}")
+        else:
+            logger.warning(f"Metadata file not found: {filename}")
+    print(f"✅ Metadata files copied")
 
     # Get list of conversation directories
+    logger.info(f"🔍 Scanning for conversation directories...")
+    print(f"🔍 Scanning source export for conversations...")
     conversations = []
     for item in source_export.iterdir():
         if item.is_dir() and item.name != "attachments":
@@ -65,20 +74,29 @@ def create_trial_export(
             if json_files:
                 conversations.append(item)
 
+    logger.info(f"Found {len(conversations)} total conversations in source export")
+    
     # Limit conversations
     conversations = conversations[:max_conversations]
-    logger.info(f"Selected {len(conversations)} conversations for trial")
+    logger.info(f"✅ Selected {len(conversations)} conversations for trial")
+    print(f"✅ Selected {len(conversations)} conversations for trial export")
 
     # Copy conversation directories with limited daily files
-    for conv_dir in conversations:
+    logger.info(f"📦 Copying conversation data...")
+    print(f"📦 Copying conversation data...")
+    for idx, conv_dir in enumerate(conversations, 1):
+        logger.info(f"  [{idx}/{len(conversations)}] Processing: {conv_dir.name}")
+        print(f"  [{idx}/{len(conversations)}] Processing: {conv_dir.name}")
         dest_dir = trial_export / conv_dir.name
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         # Get daily JSON files, sorted by date
         daily_files = sorted([f for f in conv_dir.iterdir() if f.is_file() and f.suffix == ".json"])
+        logger.debug(f"    Found {len(daily_files)} daily files in {conv_dir.name}")
 
         # Limit daily files
         daily_files = daily_files[:max_days_per_conversation]
+        logger.info(f"    Limiting to {len(daily_files)} daily files")
 
         # Copy daily files
         for daily_file in daily_files:
@@ -88,12 +106,16 @@ def create_trial_export(
         attachments_dir = conv_dir / "attachments"
         if attachments_dir.exists() and attachments_dir.is_dir():
             dest_attachments = dest_dir / "attachments"
+            attachment_count = len(list(attachments_dir.rglob("*")))
             shutil.copytree(attachments_dir, dest_attachments, dirs_exist_ok=True)
-            logger.debug(f"Copied attachments from {conv_dir.name}")
+            logger.info(f"    Copied {attachment_count} attachment(s) from {conv_dir.name}")
+            print(f"      ✅ Copied {attachment_count} attachment(s)")
 
-        logger.info(f"Copied {len(daily_files)} daily files from {conv_dir.name}")
+        logger.info(f"    ✅ Copied {len(daily_files)} daily files from {conv_dir.name}")
+        print(f"      ✅ Copied {len(daily_files)} daily files")
 
-    logger.info(f"Trial export created successfully at {trial_export}")
+    logger.info(f"✅ Trial export created successfully at {trial_export}")
+    print(f"✅ Trial export created: {trial_export.name}")
     return trial_export
 
 
@@ -115,15 +137,18 @@ def main(
         run_ingestion: Whether to run ingestion after creating trial export
     """
     if trial_export_path is None:
-        trial_export_path = source_export.parent / "trial_export"
+        # Add datestamp to trial export folder name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        trial_export_path = source_export.parent / f"trial_export_{timestamp}"
 
     logger.info("=" * 80)
-    logger.info("TRIAL RUN MODE")
+    logger.info("TRIAL RUN MODE (PREVIEW)")
     logger.info("=" * 80)
     logger.info(f"Source export: {source_export}")
     logger.info(f"Trial export: {trial_export_path}")
     logger.info(f"Max conversations: {max_conversations}")
     logger.info(f"Max days per conversation: {max_days_per_conversation}")
+    logger.info(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
 
     # Create trial export
@@ -135,13 +160,24 @@ def main(
     )
 
     if run_ingestion:
-        logger.info("Running ingestion on trial export...")
-        ingest_main(trial_export)
+        logger.info("🚀 Running ingestion on trial export...")
+        print(f"\n🚀 Starting ingestion process...")
+        # Use datestamped database path for trial runs
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        trial_db_path = Path(f"./conductor_db_preview_{timestamp}")
+        ingest_main(trial_export, db_path=trial_db_path)
         logger.info("=" * 80)
-        logger.info("Trial run complete!")
-        logger.info(f"You can now query the system with:")
-        logger.info(f'  python -m conductor.ask "your question here"')
+        logger.info("✅ Trial run complete!")
+        logger.info(f"📊 Trial export location: {trial_export}")
+        logger.info(f"💾 Database location: conductor_db/")
+        logger.info(f"🔍 You can now query the system with:")
+        logger.info(f'   python -m conductor.ask "your question here"')
+        logger.info(f"⏱️  Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 80)
+        print(f"\n✅ Trial run complete!")
+        print(f"📊 Trial export: {trial_export.name}")
+        print(f"💾 Database: conductor_db/")
+        print(f"🔍 Query with: python -m conductor.ask \"your question\"")
     else:
         logger.info("Trial export created. Run ingestion manually with:")
         logger.info(f"  python -m conductor.ingest {trial_export}")
