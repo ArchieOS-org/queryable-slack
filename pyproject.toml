@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "conductor"
+version = "0.1.0"
+description = "Real Estate AI Ingestion Engine - transforms Slack exports into queryable semantic memory"
+authors = ["Noah Deskin <noah@example.com>"]
+readme = "README.md"
+packages = [{include = "conductor"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pydantic = "^2.0"
+chromadb = "^0.4.0"
+anthropic = "^0.34.0"
+langchain-community = "^0.2.0"
+unstructured = "^0.15.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+mypy = "^1.11.0"
+ruff = "^0.6.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
