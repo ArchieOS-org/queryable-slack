@@ -24,21 +24,35 @@ Conductor ingests Slack conversation exports, extracts text from attached files 
 
 ## Quick Start
 
-1. **Install dependencies** (see Installation below)
-2. **Set up API key** - Create `.env` file:
+**New to the project?** See [ONBOARDING.md](ONBOARDING.md) for a complete setup guide.
+
+**Opening from external hard drive?** See [OPEN_FROM_HARD_DRIVE.md](OPEN_FROM_HARD_DRIVE.md) for specific instructions.
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/ArchieOS-org/queryable-slack.git
+   cd queryable-slack
+   ```
+
+2. **Install dependencies** (see Installation below)
+
+3. **Set up API key** - Create `.env` file:
    ```bash
    cp .env.example .env
    # Edit .env and add your ANTHROPIC_API_KEY
    ```
-3. **Run a trial** with a small subset:
+
+4. **Run a trial** with a small subset:
    ```bash
    python -m conductor.trial_run /path/to/slack/export
    ```
-4. **Test querying**:
+
+5. **Test querying**:
    ```bash
    python -m conductor.ask "test question"
    ```
-5. **If trial works, run full ingestion**:
+
+6. **If trial works, run full ingestion**:
    ```bash
    python -m conductor.ingest /path/to/slack/export
    ```
