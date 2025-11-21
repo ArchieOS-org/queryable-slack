@@ -13,13 +13,21 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+import multiprocessing
 
 import chromadb
 
-from conductor.file_parser import extract_text_from_file
+from conductor.file_parser import extract_text_from_file, extract_file_metadata
 from conductor.models import Session, SlackMessage, UserMap
 from conductor.processor import load_messages_from_directory, sessionize_messages
 from conductor.user_mapper import load_users
+from conductor.monitoring import track_file_processing, track_ingestion
+from conductor.chunking import chunk_session, should_chunk_session
+from conductor.config import DEFAULT_DB_PATH
+
+# Performance optimization: Limit to P-cores on M2 Max (8 P-cores)
+# macOS will use E-cores for lighter tasks automatically
+MAX_WORKERS = min(8, multiprocessing.cpu_count())  # M2 Max has 8 P-cores
 
 logging.basicConfig(
     level=logging.INFO,
@@ -176,20 +184,42 @@ def enrich_session_with_files(
                 continue
 
             # Find the attachment file (may have different naming patterns)
-            # Pattern: {FILE_ID}-{filename}
+            # Try multiple patterns in order of likelihood:
+            # 1. {FILE_ID}-{filename} (most common)
+            # 2. {FILE_ID}-{filename} with URL encoding
+            # 3. {FILE_ID}* (file_id as prefix)
+            # 4. Exact filename match (fallback)
+            matching_files = []
+            
+            # Pattern 1: {FILE_ID}-{filename}
             attachment_pattern = f"{file_id}-*"
             matching_files = list(attachments_dir.glob(attachment_pattern))
-
+            
+            # Pattern 2: {FILE_ID}* (file_id as prefix - handles partial matches)
             if not matching_files:
-                # Try alternative pattern: just file_id
                 matching_files = list(attachments_dir.glob(f"{file_id}*"))
-
+            
+            # Pattern 3: Try exact filename match (in case file_id pattern doesn't work)
+            if not matching_files:
+                exact_match = attachments_dir / filename
+                if exact_match.exists():
+                    matching_files = [exact_match]
+            
+            # Pattern 4: Try filename with file_id prefix variations
+            if not matching_files:
+                # Try {file_id}_{filename} (underscore instead of dash)
+                alt_pattern = f"{file_id}_*"
+                matching_files = list(attachments_dir.glob(alt_pattern))
+            
             if not matching_files:
                 logger.debug(f"Attachment not found for file {file_id} ({filename}) in {conversation_dir.name}")
                 files_skipped += 1
                 continue
 
+            # Use first match (most specific pattern wins)
             attachment_file = matching_files[0]
+            if len(matching_files) > 1:
+                logger.debug(f"Multiple matches for {file_id}, using: {attachment_file.name}")
 
             # Determine file type
             if filetype:
@@ -207,24 +237,92 @@ def enrich_session_with_files(
                 # Infer from extension
                 file_type = attachment_file.suffix.lower().lstrip(".")
 
+            # Extract metadata for all files
+            file_metadata = None
+            try:
+                file_metadata = extract_file_metadata(attachment_file, file_type)
+            except Exception as e:
+                logger.debug(f"  Could not extract metadata for {filename}: {e}")
+
             # Extract text from file
             try:
                 file_content = extract_text_from_file(attachment_file, file_type)
-                if file_content and not file_content.startswith("[SKIPPED:") and not file_content.startswith("[ERROR:"):
-                    enriched_parts.append(f"<<< ATTACHMENT START: {filename} >>>")
+                
+                # Always include file metadata in the enriched transcript
+                # Make file type information prominent for semantic search
+                # Use file_metadata file_type if available, otherwise use inferred file_type
+                detected_file_type = file_metadata.get('file_type', file_type) if file_metadata else file_type
+                file_type_upper = detected_file_type.upper()
+                
+                # Create prominent file type markers for semantic search
+                file_type_descriptions = {
+                    'csv': f'CSV file spreadsheet data: {filename}',
+                    'xlsx': f'Excel spreadsheet XLSX file: {filename}',
+                    'xls': f'Excel spreadsheet XLS file: {filename}',
+                    'pptx': f'PowerPoint presentation PPTX file: {filename}',
+                    'ppt': f'PowerPoint presentation PPT file: {filename}',
+                    'pdf': f'PDF document: {filename}',
+                    'docx': f'Word document DOCX file: {filename}',
+                    'doc': f'Word document DOC file: {filename}',
+                    'txt': f'Text file: {filename}',
+                    'zip': f'ZIP archive file: {filename}',
+                    'png': f'PNG image file: {filename}',
+                    'jpg': f'JPEG image file: {filename}',
+                    'jpeg': f'JPEG image file: {filename}',
+                    'mp4': f'MP4 video file: {filename}',
+                    'mov': f'MOV video file: {filename}',
+                    'mp3': f'MP3 audio file: {filename}',
+                    'wav': f'WAV audio file: {filename}',
+                }
+                
+                file_type_label = file_type_descriptions.get(detected_file_type.lower(), f'{file_type_upper} file: {filename}')
+                
+                metadata_str = ""
+                if file_metadata:
+                    metadata_str = f"File type: {file_type_upper} | File metadata: {detected_file_type}, {file_metadata['size']} bytes"
+                    if file_metadata.get('modified'):
+                        metadata_str += f", modified: {file_metadata['modified']}"
+                    metadata_str += "\n"
+                
+                # Check if file was processed (includes video/audio processing)
+                is_processed = (
+                    file_content and 
+                    not file_content.startswith("[SKIPPED:") and 
+                    not file_content.startswith("[ERROR:") and
+                    (file_content.startswith("[VIDEO_PROCESSED:") or 
+                     file_content.startswith("[AUDIO_PROCESSED:") or
+                     len(file_content.strip()) > 50)  # Has substantial content
+                )
+                
+                if is_processed:
+                    enriched_parts.append(f"<<< ATTACHMENT START: {filename} ({file_type_upper} FILE) >>>")
+                    enriched_parts.append(file_type_label)  # Prominent file type label
+                    enriched_parts.append(metadata_str)
                     enriched_parts.append(file_content)
                     enriched_parts.append("<<< ATTACHMENT END >>>")
                     files_processed += 1
+                    track_file_processing(detected_file_type, success=True)
                     logger.debug(f"  ✅ Processed attachment: {filename}")
                 else:
+                    # Even skipped files get metadata included
+                    enriched_parts.append(f"<<< ATTACHMENT START: {filename} ({file_type_upper} FILE) >>>")
+                    enriched_parts.append(file_type_label)  # Prominent file type label
+                    enriched_parts.append(metadata_str)
+                    enriched_parts.append(file_content)  # Contains structured skip message
+                    enriched_parts.append("<<< ATTACHMENT END >>>")
                     files_skipped += 1
+                    track_file_processing(detected_file_type, success=False, error_type="skipped")
                     logger.debug(f"  ⏭️  Skipped attachment: {filename}")
             except Exception as e:
                 logger.warning(f"  ⚠️  Failed to process attachment {filename}: {e}")
                 enriched_parts.append(f"<<< ATTACHMENT START: {filename} >>>")
+                if file_metadata:
+                    metadata_str = f"File metadata: {file_metadata['file_type']}, {file_metadata['size']} bytes\n"
+                    enriched_parts.append(metadata_str)
                 enriched_parts.append(f"[ERROR: Could not parse file {filename}]")
                 enriched_parts.append("<<< ATTACHMENT END >>>")
                 files_error += 1
+                track_file_processing(detected_file_type, success=False, error_type=type(e).__name__)
 
     if files_processed > 0:
         logger.debug(f"  File enrichment: {files_processed} processed, {files_skipped} skipped, {files_error} errors")
@@ -245,7 +343,7 @@ def enrich_session_with_files(
     )
 
 
-def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = Path("./conductor_db")) -> None:
+def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = DEFAULT_DB_PATH) -> None:
     """
     Store sessions in ChromaDB for vector search.
 
@@ -272,31 +370,61 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = Path("./
             metadata={"description": "Real Estate Slack conversation sessions"},
         )
 
-        # Prepare data for upsert
+        # Prepare data for upsert (with chunking support)
         logger.info(f"📝 Preparing {len(sessions)} sessions for storage...")
         print(f"📝 Preparing {len(sessions)} sessions for vector storage...")
         ids = []
         documents = []
         metadatas = []
+        chunked_count = 0
 
         for idx, session in enumerate(sessions, 1):
             if idx % 10 == 0 or idx == len(sessions):
                 logger.debug(f"  Preparing session {idx}/{len(sessions)}: {session.channel_name}")
                 print(f"  Processing session {idx}/{len(sessions)}...", end="\r")
             
-            ids.append(session.session_id)
-            documents.append(session.enriched_transcript)
-            metadatas.append(
-                {
-                    "date": session.start_time.date().isoformat(),
-                    "channel": session.channel_name,
-                    "start_time": session.start_time.isoformat(),
-                    "end_time": session.end_time.isoformat(),
-                    "message_count": session.message_count,
-                    "file_count": session.file_count,
-                    "conversation_type": session.conversation_type,
-                }
-            )
+            # Check if session needs chunking
+            if should_chunk_session(session):
+                chunks = chunk_session(session)
+                chunked_count += 1
+                logger.debug(f"  Chunked session {session.session_id} into {len(chunks)} chunks")
+                
+                for chunk in chunks:
+                    ids.append(chunk["chunk_id"])
+                    documents.append(chunk["enriched_transcript"])
+                    metadatas.append(
+                        {
+                            "date": chunk["start_time"].date().isoformat(),
+                            "channel": chunk["channel_name"],
+                            "start_time": chunk["start_time"].isoformat(),
+                            "end_time": chunk["end_time"].isoformat(),
+                            "message_count": chunk["message_count"],
+                            "file_count": chunk["file_count"],
+                            "conversation_type": chunk["conversation_type"],
+                            "session_id": chunk["session_id"],
+                            "chunk_index": chunk["chunk_index"],
+                            "total_chunks": chunk["total_chunks"],
+                        }
+                    )
+            else:
+                # Regular session, no chunking needed
+                ids.append(session.session_id)
+                documents.append(session.enriched_transcript)
+                metadatas.append(
+                    {
+                        "date": session.start_time.date().isoformat(),
+                        "channel": session.channel_name,
+                        "start_time": session.start_time.isoformat(),
+                        "end_time": session.end_time.isoformat(),
+                        "message_count": session.message_count,
+                        "file_count": session.file_count,
+                        "conversation_type": session.conversation_type,
+                    }
+                )
+        
+        if chunked_count > 0:
+            logger.info(f"📦 Chunked {chunked_count} large sessions")
+            print(f"📦 Chunked {chunked_count} large sessions")
 
         print()  # New line after progress
         logger.info(f"🔢 Generating embeddings and storing in ChromaDB...")
@@ -332,9 +460,9 @@ def main(export_path: Path, db_path: Optional[Path] = None) -> None:
     start_time = datetime.now()
     timestamp = start_time.strftime("%Y%m%d_%H%M%S")
     
-    # Add datestamp to database path if not provided
+    # Use default database path if not provided
     if db_path is None:
-        db_path = Path(f"./conductor_db_{timestamp}")
+        db_path = DEFAULT_DB_PATH
     
     logger.info("=" * 80)
     logger.info("INGESTION PIPELINE")
@@ -356,8 +484,8 @@ def main(export_path: Path, db_path: Optional[Path] = None) -> None:
     try:
         logger.info("Loading user mappings from users.json...")
         user_map = load_users(export_path)
-        logger.info(f"✅ Loaded {len(user_map.users)} users")
-        print(f"✅ Loaded {len(user_map.users)} users")
+        logger.info(f"✅ Loaded {len(user_map)} users")
+        print(f"✅ Loaded {len(user_map)} users")
     except Exception as e:
         logger.exception(f"❌ Failed to load users: {e}")
         print(f"❌ Error loading users: {e}")
@@ -476,6 +604,11 @@ def main(export_path: Path, db_path: Optional[Path] = None) -> None:
 
     end_time = datetime.now()
     duration = end_time - start_time
+    duration_seconds = duration.total_seconds()
+    
+    # Track ingestion metrics
+    track_ingestion(len(all_sessions), duration_seconds)
+    
     logger.info("=" * 80)
     logger.info("✅ INGESTION COMPLETE!")
     logger.info(f"📊 Processed {len(all_sessions)} sessions")

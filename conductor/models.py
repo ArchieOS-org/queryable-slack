@@ -10,7 +10,7 @@ Best practices:
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, field_validator, ValidationInfo, ValidationError
+from pydantic import BaseModel, field_validator, ValidationInfo, ValidationError, ConfigDict
 
 
 class UserMap(BaseModel):
@@ -39,10 +39,9 @@ class UserMap(BaseModel):
             # Fallback: assume not a bot if we can't determine
             return False
 
-    class Config:
-        """Pydantic v2 config."""
-
-        extra = "ignore"  # Ignore extra fields from Slack export
+    model_config = ConfigDict(
+        extra="ignore"  # Ignore extra fields from Slack export
+    )
 
 
 class SlackMessage(BaseModel):
@@ -55,10 +54,9 @@ class SlackMessage(BaseModel):
     files: Optional[List[Dict[str, Any]]] = None
     user_profile: Optional[Dict[str, Any]] = None
 
-    class Config:
-        """Pydantic v2 config."""
-
-        extra = "ignore"  # Ignore extra fields from Slack export
+    model_config = ConfigDict(
+        extra="ignore"  # Ignore extra fields from Slack export
+    )
 
 
 class Session(BaseModel):

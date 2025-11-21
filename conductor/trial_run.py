@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from conductor.ingest import main as ingest_main
+from conductor.config import DEFAULT_DB_PATH
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,10 +77,135 @@ def create_trial_export(
 
     logger.info(f"Found {len(conversations)} total conversations in source export")
     
-    # Limit conversations
-    conversations = conversations[:max_conversations]
-    logger.info(f"✅ Selected {len(conversations)} conversations for trial")
+    # Find conversations with diverse file types to ensure comprehensive testing
+    # This matches all file types supported in file_parser.py
+    required_file_types = {
+        # Text documents
+        "pdf": [".pdf"],
+        "docx": [".docx"],
+        "txt": [".txt"],
+        # Spreadsheets
+        "csv": [".csv"],
+        "xlsx": [".xlsx"],
+        "xls": [".xls"],
+        # Presentations
+        "pptx": [".pptx"],
+        # Archives
+        "zip": [".zip"],
+        # Images (all formats we handle)
+        "image": [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"],
+        # Videos (all formats we handle)
+        "video": [".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv"],
+        # Audio (all formats we handle)
+        "audio": [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma"],
+    }
+    
+    # Score conversations by file type diversity
+    conversation_scores = {}
+    for conv_dir in conversations:
+        attachments_dir = conv_dir / "attachments"
+        if not attachments_dir.exists():
+            continue
+        
+        file_types_found = set()
+        for file_type_name, extensions in required_file_types.items():
+            for ext in extensions:
+                if list(attachments_dir.rglob(f"*{ext}")):
+                    file_types_found.add(file_type_name)
+                    break
+        
+        # Score: number of unique file types found
+        conversation_scores[conv_dir] = len(file_types_found)
+    
+    # Sort by score (highest diversity first)
+    conversations_sorted = sorted(conversations, key=lambda x: conversation_scores.get(x, 0), reverse=True)
+    
+    # Select conversations to ensure we cover all file types
+    selected_conversations = []
+    file_types_covered = set()
+    
+    # Priority order: prioritize rare file types first (CSV, XLSX, PPTX, XLS, DOCX)
+    priority_types = ["csv", "xlsx", "pptx", "xls", "docx", "zip", "txt", "pdf", "audio", "video", "image"]
+    
+    # First pass: prioritize conversations with rare file types
+    for priority_type in priority_types:
+        if priority_type in file_types_covered:
+            continue
+        for conv_dir in conversations_sorted:
+            if conv_dir in selected_conversations:
+                continue
+            attachments_dir = conv_dir / "attachments"
+            if not attachments_dir.exists():
+                continue
+            # Check if this conversation has the priority type
+            extensions = required_file_types.get(priority_type, [])
+            for ext in extensions:
+                if list(attachments_dir.rglob(f"*{ext}")):
+                    selected_conversations.append(conv_dir)
+                    file_types_covered.add(priority_type)
+                    # Also mark other types found in this conversation
+                    for file_type_name, type_extensions in required_file_types.items():
+                        if file_type_name in file_types_covered:
+                            continue
+                        for type_ext in type_extensions:
+                            if list(attachments_dir.rglob(f"*{type_ext}")):
+                                file_types_covered.add(file_type_name)
+                                break
+                    break
+            if priority_type in file_types_covered:
+                break
+    
+    # Second pass: ensure we have images (very common, but make sure we include at least one)
+    if "image" not in file_types_covered:
+        for conv_dir in conversations_sorted:
+            if conv_dir in selected_conversations:
+                continue
+            attachments_dir = conv_dir / "attachments"
+            if not attachments_dir.exists():
+                continue
+            # Check for images
+            for ext in required_file_types.get("image", []):
+                if list(attachments_dir.rglob(f"*{ext}")):
+                    selected_conversations.append(conv_dir)
+                    file_types_covered.add("image")
+                    # Also mark other types found
+                    for file_type_name, type_extensions in required_file_types.items():
+                        if file_type_name in file_types_covered:
+                            continue
+                        for type_ext in type_extensions:
+                            if list(attachments_dir.rglob(f"*{type_ext}")):
+                                file_types_covered.add(file_type_name)
+                                break
+                    break
+            if "image" in file_types_covered:
+                break
+    
+    # Third pass: fill remaining slots with highest diversity conversations
+    for conv_dir in conversations_sorted:
+        if conv_dir in selected_conversations:
+            continue
+        if len(selected_conversations) >= max_conversations:
+            break
+        selected_conversations.append(conv_dir)
+        # Update coverage
+        attachments_dir = conv_dir / "attachments"
+        if attachments_dir.exists():
+            for file_type_name, extensions in required_file_types.items():
+                if file_type_name in file_types_covered:
+                    continue
+                for ext in extensions:
+                    if list(attachments_dir.rglob(f"*{ext}")):
+                        file_types_covered.add(file_type_name)
+                        break
+    
+    conversations = selected_conversations
+    logger.info(f"✅ Selected {len(conversations)} conversations for trial (covering {len(file_types_covered)}/{len(required_file_types)} file types)")
     print(f"✅ Selected {len(conversations)} conversations for trial export")
+    if file_types_covered:
+        print(f"   📎 File types covered: {', '.join(sorted(file_types_covered))}")
+    missing_types = set(required_file_types.keys()) - file_types_covered
+    if missing_types:
+        print(f"   ⚠️  Missing file types: {', '.join(sorted(missing_types))}")
 
     # Copy conversation directories with limited daily files
     logger.info(f"📦 Copying conversation data...")
@@ -164,19 +290,21 @@ def main(
         print(f"\n🚀 Starting ingestion process...")
         # Use datestamped database path for trial runs
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        trial_db_path = Path(f"./conductor_db_preview_{timestamp}")
+        # Use default path with preview suffix
+        trial_db_path = DEFAULT_DB_PATH / f"preview_{timestamp}"
+        trial_db_path.mkdir(parents=True, exist_ok=True)
         ingest_main(trial_export, db_path=trial_db_path)
         logger.info("=" * 80)
         logger.info("✅ Trial run complete!")
         logger.info(f"📊 Trial export location: {trial_export}")
-        logger.info(f"💾 Database location: conductor_db/")
+        logger.info(f"💾 Database location: {trial_db_path}")
         logger.info(f"🔍 You can now query the system with:")
         logger.info(f'   python -m conductor.ask "your question here"')
         logger.info(f"⏱️  Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 80)
         print(f"\n✅ Trial run complete!")
         print(f"📊 Trial export: {trial_export.name}")
-        print(f"💾 Database: conductor_db/")
+        print(f"💾 Database: {trial_db_path}")
         print(f"🔍 Query with: python -m conductor.ask \"your question\"")
     else:
         logger.info("Trial export created. Run ingestion manually with:")

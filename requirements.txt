@@ -17,8 +17,27 @@ langchain-community>=0.4.1
 # File parsing (used by langchain-community)
 unstructured>=0.15.0
 
+# Spreadsheet processing
+pandas>=2.0.0
+openpyxl>=3.1.0
+xlrd>=2.0.0
+
+# Presentation processing
+python-pptx>=0.6.23
+
+# Video processing
+ffmpeg-python>=0.2.0
+
+# MLX-optimized ML libraries for Apple Silicon
+mlx>=0.19.0
+mlx-vlm>=0.1.0
+lightning-whisper-mlx>=0.0.1
+
 # Environment variable management
 python-dotenv>=1.0.0
+
+# Testing
+pytest>=8.0.0
 
 # ChromaDB dependencies (installed automatically, but listed for reference)
 # sentence-transformers>=2.2.2

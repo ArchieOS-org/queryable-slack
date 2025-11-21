@@ -15,7 +15,7 @@ Conductor ingests Slack conversation exports, extracts text from attached files 
 - **File Enrichment**: Automatically extracts text from PDF, DOCX, and TXT attachments
 - **Sessionization**: Groups messages into conversation sessions based on 6-hour time gaps
 - **Semantic Search**: Vector-based similarity search using ChromaDB
-- **LLM Integration**: Claude 3.5 Sonnet for intelligent query responses
+- **LLM Integration**: Claude Sonnet 4.5 for intelligent query responses with enhanced reasoning
 
 ## Requirements
 
@@ -171,7 +171,7 @@ The query process:
 1. Embeds your query using the same embedding model
 2. Searches ChromaDB for top 5 most similar sessions
 3. Formats retrieved context with metadata
-4. Sends to Claude 3.5 Sonnet with system prompt
+4. Sends to Claude Sonnet 4.5 with system prompt
 5. Returns intelligent answer citing sources
 
 ## Project Structure
