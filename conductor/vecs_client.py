@@ -110,32 +110,90 @@ def query_vecs(
                 "distances": [[]]
             }
         
-        # Fetch full records with metadata for the returned IDs
-        # Vecs stores documents in metadata, so we need to retrieve them
+        # Vecs query returns IDs, but we need metadata and documents
+        # We stored documents in metadata['document'], so we need to fetch records
+        # Query PostgreSQL directly to get full records with metadata
         ids = []
         documents = []
         metadatas = []
         distances = []
         
-        # Vecs query returns IDs, but we need to get the full records
-        # For now, we'll use the IDs and fetch metadata separately if needed
-        # Note: vecs stores document text in metadata['document']
-        for result_id in result_ids:
-            # Try to get the record from collection
-            # Vecs doesn't have a direct "get by ID" method, so we'll use the IDs
-            # and reconstruct from what we stored
-            ids.append(result_id)
-            # Distance is not directly available from query, set to 0.0
-            # Vecs uses cosine similarity internally
-            distances.append(0.0)
-            # Metadata and document will be retrieved from stored records
-            # For now, return empty and let the caller handle it
-            metadatas.append({})
-            documents.append('')
-        
-        # TODO: Implement proper record retrieval from vecs
-        # Vecs may need a different approach - we might need to store records
-        # in a way that allows retrieval by ID, or use a different query method
+        try:
+            import psycopg
+            from urllib.parse import urlparse
+            import json
+            
+            db_url = os.environ.get('DATABASE_URL')
+            if not db_url:
+                raise ValueError("DATABASE_URL not set")
+            
+            parsed = urlparse(db_url)
+            conn = psycopg.connect(
+                host=parsed.hostname,
+                port=parsed.port or 5432,
+                user=parsed.username,
+                password=parsed.password,
+                dbname=parsed.path.lstrip('/')
+            )
+            
+            # Query vecs table directly
+            # Vecs stores collections in a table named after the collection in the vecs schema
+            # The table has: id (text), embedding (vector), metadata (jsonb)
+            table_name = f'"{COLLECTION_NAME}"'  # Vecs uses collection name as table name
+            placeholders = ','.join(['%s'] * len(result_ids))
+            
+            with conn.cursor() as cur:
+                # Try vecs schema first
+                try:
+                    cur.execute(
+                        f"""
+                        SELECT id, metadata
+                        FROM vecs.{table_name}
+                        WHERE id IN ({placeholders})
+                        """,
+                        result_ids
+                    )
+                except Exception:
+                    # If vecs schema doesn't work, try public schema
+                    cur.execute(
+                        f"""
+                        SELECT id, metadata
+                        FROM {table_name}
+                        WHERE id IN ({placeholders})
+                        """,
+                        result_ids
+                    )
+                
+                rows = cur.fetchall()
+                
+                # Create a map of ID to metadata for quick lookup
+                id_to_metadata = {}
+                for row in rows:
+                    record_id, metadata_json = row
+                    id_to_metadata[record_id] = metadata_json if metadata_json else {}
+            
+            conn.close()
+            
+            # Process results in the order returned by query
+            for record_id in result_ids:
+                ids.append(record_id)
+                metadata = id_to_metadata.get(record_id, {})
+                metadatas.append(metadata)
+                # Extract document from metadata (we stored it there during upsert)
+                documents.append(metadata.get('document', ''))
+                # Distance is not available from vecs query, use 0.0
+                # (vecs uses cosine similarity internally, but doesn't expose distance in query)
+                distances.append(0.0)
+                
+        except Exception as e:
+            logger.error(f"Error fetching vecs records: {e}", exc_info=True)
+            # Fallback: return IDs only with empty metadata
+            logger.warning("Falling back to IDs only - metadata and documents unavailable")
+            for record_id in result_ids:
+                ids.append(record_id)
+                metadatas.append({})
+                documents.append('')
+                distances.append(0.0)
         
         return {
             "ids": [ids],
