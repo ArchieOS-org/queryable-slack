@@ -13,19 +13,72 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 
 import json
-import pandas as pd
-from langchain_community.document_loaders import PyPDFLoader, UnstructuredFileLoader
-from pptx import Presentation
 
-try:
-    import openpyxl
-except ImportError:
-    openpyxl = None
+# Lazy imports for heavy dependencies - only load when needed
+_pandas = None
+_py_pdf_loader = None
+_unstructured_loader = None
+_pptx_presentation = None
+_openpyxl = None
+_xlrd = None
 
-try:
-    import xlrd
-except ImportError:
-    xlrd = None
+def _get_pandas():
+    """Lazy load pandas."""
+    global _pandas
+    if _pandas is None:
+        import pandas as pd
+        _pandas = pd
+    return _pandas
+
+def _get_pypdf_loader():
+    """Lazy load PyPDFLoader."""
+    global _py_pdf_loader
+    if _py_pdf_loader is None:
+        from langchain_community.document_loaders import PyPDFLoader
+        _py_pdf_loader = PyPDFLoader
+    return _py_pdf_loader
+
+def _get_unstructured_loader():
+    """Lazy load UnstructuredFileLoader (with deprecation warning suppression)."""
+    global _unstructured_loader
+    if _unstructured_loader is None:
+        import warnings
+        # Suppress LangChain deprecation warnings for UnstructuredFileLoader
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
+            from langchain_community.document_loaders import UnstructuredFileLoader
+            _unstructured_loader = UnstructuredFileLoader
+    return _unstructured_loader
+
+def _get_pptx():
+    """Lazy load python-pptx."""
+    global _pptx_presentation
+    if _pptx_presentation is None:
+        from pptx import Presentation
+        _pptx_presentation = Presentation
+    return _pptx_presentation
+
+def _get_openpyxl():
+    """Lazy load openpyxl."""
+    global _openpyxl
+    if _openpyxl is None:
+        try:
+            import openpyxl
+            _openpyxl = openpyxl
+        except ImportError:
+            _openpyxl = None
+    return _openpyxl
+
+def _get_xlrd():
+    """Lazy load xlrd."""
+    global _xlrd
+    if _xlrd is None:
+        try:
+            import xlrd
+            _xlrd = xlrd
+        except ImportError:
+            _xlrd = None
+    return _xlrd
 
 # Import video, audio, and image processors (optional dependencies)
 try:
@@ -124,6 +177,7 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
     # Handle PDF files
     if file_type == "pdf":
         try:
+            PyPDFLoader = _get_pypdf_loader()
             loader = PyPDFLoader(str(file_path))
             docs = loader.load()
             text_content = "\n\n".join([doc.page_content for doc in docs])
@@ -136,6 +190,7 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
     # Handle DOCX files
     if file_type == "docx":
         try:
+            UnstructuredFileLoader = _get_unstructured_loader()
             loader = UnstructuredFileLoader(str(file_path))
             docs = loader.load()
             text_content = "\n\n".join([doc.page_content for doc in docs])
@@ -170,6 +225,7 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
     if file_type == "csv":
         try:
             # Try reading with different encodings and delimiters
+            pd = _get_pandas()
             df = pd.read_csv(file_path, encoding="utf-8", on_bad_lines="skip")
             # Convert DataFrame to readable text format
             text_content = df.to_string(index=False)
@@ -177,6 +233,7 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
             return text_content
         except UnicodeDecodeError:
             try:
+                pd = _get_pandas()
                 df = pd.read_csv(file_path, encoding="latin-1", on_bad_lines="skip")
                 text_content = df.to_string(index=False)
                 logger.debug(f"Extracted content from CSV with latin-1 encoding: {file_path.name}")
@@ -190,6 +247,7 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
 
     # Handle XLSX files
     if file_type == "xlsx":
+        openpyxl = _get_openpyxl()
         if openpyxl is None:
             logger.warning(f"openpyxl not installed, cannot parse XLSX: {file_path.name}")
             return f"[ERROR: openpyxl not installed, cannot parse file {file_path.name}]"
@@ -212,6 +270,7 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
 
     # Handle XLS files (legacy Excel)
     if file_type == "xls":
+        xlrd = _get_xlrd()
         if xlrd is None:
             logger.warning(f"xlrd not installed, cannot parse XLS: {file_path.name}")
             return f"[ERROR: xlrd not installed, cannot parse file {file_path.name}]"
@@ -236,6 +295,7 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
     # Handle PPTX files
     if file_type == "pptx":
         try:
+            Presentation = _get_pptx()
             prs = Presentation(file_path)
             text_parts = []
             for slide_idx, slide in enumerate(prs.slides, 1):
@@ -288,21 +348,27 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
     # Handle images - process with MLX-VLM for descriptions
     image_types = {"png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"}
     if file_type in image_types:
-        logger.debug(f"Processing image: {file_path.name}")
+        metadata = extract_file_metadata(file_path, file_type)
+        
         if process_image_content is not None:
             try:
                 image_content = process_image_content(file_path)
-                # Format as structured JSON for embedding
-                description = image_content.get("description_result", {}).get("description", "")
-                metadata = image_content.get("metadata", {})
-                return f"[IMAGE_PROCESSED: Description: {description} | Metadata: {json.dumps(metadata)}]"
+                description_result = image_content.get("description_result", {})
+                
+                # Check if processing was successful
+                if description_result.get("success", False):
+                    description = description_result.get("description", "")
+                    return f"[IMAGE_PROCESSED: Description: {description} | Metadata: {json.dumps(metadata)}]"
+                else:
+                    # Processing failed but we have metadata - skip gracefully
+                    error = description_result.get("error", "Unknown error")
+                    logger.debug(f"Image processing skipped for {file_path.name}: {error}")
+                    return f"[SKIPPED: Image file {metadata['filename']} (size: {metadata['size']} bytes, type: {metadata['file_type']}) - {error}]"
             except Exception as e:
                 logger.warning(f"Failed to process image {file_path.name}: {e}")
-                metadata = extract_file_metadata(file_path, file_type)
                 return f"[SKIPPED: Image file {metadata['filename']} (size: {metadata['size']} bytes, type: {metadata['file_type']}) - Error: {e}]"
         else:
             # Fallback to metadata-only if processor not available
-            metadata = extract_file_metadata(file_path, file_type)
             return f"[SKIPPED: Image file {metadata['filename']} (size: {metadata['size']} bytes, type: {metadata['file_type']}) - MLX-VLM not available]"
 
     # Handle videos - process with video processor if available
@@ -318,8 +384,10 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
                     file_path,
                     extract_audio=True,
                     generate_description=True,
-                    fps=1.0,  # Extract 1 frame per second
-                    max_frames=30  # Limit to 30 frames max
+                    fps=1.0,  # Base: 1 frame per second (reduced for large files)
+                    max_frames=30,  # Base: 30 frames max (reduced for large files)
+                    max_duration_seconds=600.0,  # Process up to 10 minutes
+                    max_file_size_mb=2000.0  # Allow up to 2GB with adaptive processing
                 )
                 
                 # Build structured content from video processing
@@ -338,7 +406,11 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
                     # Transcribe audio if available
                     if process_audio_content is not None:
                         try:
-                            audio_result = process_audio_content(video_result['audio_path'])
+                            audio_result = process_audio_content(
+                                Path(video_result['audio_path']),
+                                max_duration_seconds=1800.0,  # Limit to 30 minutes
+                                max_file_size_mb=200.0  # Limit to 200MB
+                            )
                             if audio_result.get('success') and audio_result.get('text'):
                                 content_parts.append(f"Audio transcription: {audio_result['text']}")
                         except Exception as e:
@@ -363,7 +435,11 @@ def extract_text_from_file(file_path: Path, file_type: Optional[str] = None) -> 
         if process_audio_content is not None:
             try:
                 logger.info(f"Processing audio: {file_path.name}")
-                audio_result = process_audio_content(file_path)
+                audio_result = process_audio_content(
+                    file_path,
+                    max_duration_seconds=1800.0,  # Limit to 30 minutes
+                    max_file_size_mb=200.0  # Limit to 200MB
+                )
                 
                 # Build structured content from audio processing
                 content_parts = []

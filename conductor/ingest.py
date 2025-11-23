@@ -4,18 +4,58 @@ Main ingestion orchestration.
 Entry point for the 5-step ingestion pipeline.
 """
 
+# CRITICAL: Output IMMEDIATELY before ANY imports - this must be first!
+import sys
+import os
+# Force unbuffered output
+os.environ['PYTHONUNBUFFERED'] = '1'
+# Suppress tokenizer parallelism warnings (harmless but noisy)
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(line_buffering=True)
+    except:
+        pass
+
+# Immediate output - write directly to file descriptor if possible
+try:
+    sys.stdout.write("🔧 Loading conductor.ingest module...\n")
+    sys.stdout.flush()
+except:
+    pass
+
 import glob
 import hashlib
 import json
 import logging
 import os
-import re
+import re  # Required for discover_conversations function
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-import multiprocessing
 
-import chromadb
+# Lazy import multiprocessing to avoid blocking
+_multiprocessing = None
+def _get_multiprocessing():
+    global _multiprocessing
+    if _multiprocessing is None:
+        import multiprocessing
+        _multiprocessing = multiprocessing
+    return _multiprocessing
+
+# Lazy import chromadb to avoid blocking
+_chromadb = None
+def _get_chromadb():
+    global _chromadb
+    if _chromadb is None:
+        import chromadb
+        _chromadb = chromadb
+    return _chromadb
 
 from conductor.file_parser import extract_text_from_file, extract_file_metadata
 from conductor.models import Session, SlackMessage, UserMap
@@ -24,16 +64,78 @@ from conductor.user_mapper import load_users
 from conductor.monitoring import track_file_processing, track_ingestion
 from conductor.chunking import chunk_session, should_chunk_session
 from conductor.config import DEFAULT_DB_PATH
+from conductor.checkpoint import CheckpointManager, get_already_processed_channels
+
+# Rich progress bar imports
+try:
+    from rich.progress import (
+        Progress,
+        TextColumn,
+        BarColumn,
+        TaskProgressColumn,
+        TimeElapsedColumn,
+        ProgressColumn,
+    )
+    from rich.text import Text
+    from rich.console import Console
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
+
+class TimeRemainingDaysColumn(ProgressColumn):
+    """Custom column that displays time remaining in days:hours:minutes format."""
+    
+    max_refresh = 0.5  # Refresh twice per second to prevent jitter
+    
+    def render(self, task) -> Text:
+        """Show time remaining in days:hours:minutes format."""
+        if task.total is None:
+            return Text("", style="progress.remaining")
+        
+        task_time = task.time_remaining
+        
+        if task_time is None:
+            return Text("--:--:--", style="progress.remaining")
+        
+        # Calculate days, hours, minutes
+        total_seconds = int(task_time)
+        days, remainder = divmod(total_seconds, 86400)  # 86400 seconds in a day
+        hours, remainder = divmod(remainder, 3600)      # 3600 seconds in an hour
+        minutes, _ = divmod(remainder, 60)
+        
+        # Format: days:hours:minutes (only show days if > 0)
+        if days > 0:
+            formatted = f"{days}d:{hours:02d}h:{minutes:02d}m"
+        else:
+            formatted = f"{hours:02d}h:{minutes:02d}m"
+        
+        return Text(formatted, style="progress.remaining")
+
+print("✅ Module imports complete", file=sys.stdout, flush=True)
 
 # Performance optimization: Limit to P-cores on M2 Max (8 P-cores)
 # macOS will use E-cores for lighter tasks automatically
-MAX_WORKERS = min(8, multiprocessing.cpu_count())  # M2 Max has 8 P-cores
+# Lazy initialization to avoid blocking at import time
+def get_max_workers():
+    """Get max workers, avoiding blocking at module import time."""
+    try:
+        multiprocessing = _get_multiprocessing()
+        return min(8, multiprocessing.cpu_count())  # M2 Max has 8 P-cores
+    except Exception:
+        return 4  # Safe fallback
+MAX_WORKERS = None  # Will be initialized lazily
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Configure logging to suppress noisy warnings
+logging.getLogger("conductor.video_processor").setLevel(logging.INFO)  # Suppress DEBUG FFmpeg messages
+logging.getLogger("conductor.audio_processor").setLevel(logging.INFO)  # Suppress DEBUG audio messages
+logging.getLogger("pypdf").setLevel(logging.ERROR)  # Suppress pypdf warnings
 
 
 def discover_conversations(export_path: Path) -> Dict[str, str]:
@@ -88,7 +190,25 @@ def discover_conversations(export_path: Path) -> Dict[str, str]:
             logger.warning(f"Failed to load mpims.json: {e}")
 
     # Scan export directory for conversation directories
-    for item in export_path.iterdir():
+    logger.info(f"Scanning directory: {export_path}")
+    print(f"   Scanning directory: {export_path}", flush=True)
+    
+    try:
+        items = list(export_path.iterdir())
+        logger.info(f"Found {len(items)} items in export directory")
+        print(f"   Found {len(items)} items to scan", flush=True)
+    except Exception as e:
+        logger.error(f"Failed to list directory contents: {e}")
+        print(f"   ❌ Error listing directory: {e}", flush=True)
+        raise
+    
+    processed = 0
+    for item in items:
+        processed += 1
+        if processed % 50 == 0:
+            logger.debug(f"Processed {processed}/{len(items)} items...")
+            print(f"   Processed {processed}/{len(items)} items...", flush=True)
+        
         if not item.is_dir():
             continue
 
@@ -116,12 +236,12 @@ def discover_conversations(export_path: Path) -> Dict[str, str]:
         # Last-resort fallback: Check if it looks like a DM directory
         # This regex matches Slack DM IDs: starts with 'D' followed by 8+ alphanumeric characters
         # Only used when metadata files are missing or corrupted
-        import re
         if re.match(r"^D[A-Z0-9]{8,}$", dir_name):
             conversations[dir_name] = "dm"
             continue
 
     logger.info(f"Discovered {len(conversations)} conversations")
+    print(f"   ✅ Discovered {len(conversations)} conversations", flush=True)
     return conversations
 
 
@@ -147,7 +267,7 @@ def get_channel_name_for_session(dir_name: str, conversation_type: str) -> str:
 
 
 def enrich_session_with_files(
-    session: Session, messages: List[SlackMessage], conversation_dir: Path
+    session: Session, messages: List[SlackMessage], conversation_dir: Path, checkpoint: Optional[CheckpointManager] = None
 ) -> Session:
     """
     Enrich a session's transcript with file content.
@@ -156,10 +276,14 @@ def enrich_session_with_files(
         session: Session to enrich
         messages: List of SlackMessage objects in the session
         conversation_dir: Path to conversation directory
+        checkpoint: Optional checkpoint manager for tracking file failures
 
     Returns:
         Enriched Session object
     """
+    # Store checkpoint in function attribute for access in nested scope (for backward compatibility)
+    if checkpoint:
+        enrich_session_with_files._checkpoint = checkpoint
     attachments_dir = conversation_dir / "attachments"
     if not attachments_dir.exists():
         # No attachments directory, return session as-is
@@ -194,11 +318,11 @@ def enrich_session_with_files(
             # Pattern 1: {FILE_ID}-{filename}
             attachment_pattern = f"{file_id}-*"
             matching_files = list(attachments_dir.glob(attachment_pattern))
-            
+
             # Pattern 2: {FILE_ID}* (file_id as prefix - handles partial matches)
             if not matching_files:
                 matching_files = list(attachments_dir.glob(f"{file_id}*"))
-            
+
             # Pattern 3: Try exact filename match (in case file_id pattern doesn't work)
             if not matching_files:
                 exact_match = attachments_dir / filename
@@ -244,6 +368,15 @@ def enrich_session_with_files(
             except Exception as e:
                 logger.debug(f"  Could not extract metadata for {filename}: {e}")
 
+            # Check if this file was previously failed and should be retried
+            file_path_str = str(attachment_file)
+            checkpoint = getattr(enrich_session_with_files, '_checkpoint', None)
+            should_retry_file = False
+            if checkpoint and checkpoint.is_file_failed(file_path_str):
+                should_retry_file = True
+                failed_info = checkpoint.get_failed_files().get(file_path_str, {})
+                logger.info(f"  🔄 Retrying previously failed file: {filename} (attempt {failed_info.get('retry_count', 0) + 1})")
+            
             # Extract text from file
             try:
                 file_content = extract_text_from_file(attachment_file, file_type)
@@ -303,18 +436,58 @@ def enrich_session_with_files(
                     files_processed += 1
                     track_file_processing(detected_file_type, success=True)
                     logger.debug(f"  ✅ Processed attachment: {filename}")
+                    
+                    # Mark file as successful in checkpoint if it was previously failed
+                    if checkpoint and should_retry_file:
+                        checkpoint.mark_file_success(file_path_str)
+                        logger.info(f"  ✅ Successfully retried file: {filename}")
                 else:
+                    # Check if file processing failed (not just skipped)
+                    is_error = (
+                        file_content.startswith("[ERROR:") or
+                        file_content.startswith("[SKIPPED:") and "processing failed" in file_content.lower()
+                    )
+                    
                     # Even skipped files get metadata included
                     enriched_parts.append(f"<<< ATTACHMENT START: {filename} ({file_type_upper} FILE) >>>")
                     enriched_parts.append(file_type_label)  # Prominent file type label
                     enriched_parts.append(metadata_str)
                     enriched_parts.append(file_content)  # Contains structured skip message
                     enriched_parts.append("<<< ATTACHMENT END >>>")
-                    files_skipped += 1
-                    track_file_processing(detected_file_type, success=False, error_type="skipped")
-                    logger.debug(f"  ⏭️  Skipped attachment: {filename}")
+                    
+                    if is_error:
+                        files_error += 1
+                        error_type = "processing_failed"
+                        # Extract error type from content if possible
+                        if "FFmpeg error" in file_content:
+                            error_type = "ffmpeg_error"
+                        elif "Failed to transcribe" in file_content:
+                            error_type = "audio_transcription_error"
+                        elif "cannot write mode RGBA" in file_content:
+                            error_type = "rgba_jpeg_error"
+                        elif "unknown file extension" in file_content:
+                            error_type = "unsupported_format"
+                        elif "partition_docx" in file_content:
+                            error_type = "docx_parse_error"
+                        
+                        # Track file failure in checkpoint
+                        if checkpoint:
+                            checkpoint.mark_file_failed(
+                                file_path_str,
+                                file_content[:200],  # First 200 chars of error
+                                error_type,
+                                conversation_dir.name
+                            )
+                        track_file_processing(detected_file_type, success=False, error_type=error_type)
+                        logger.warning(f"  ⚠️  Failed to process attachment {filename}: {error_type}")
+                    else:
+                        files_skipped += 1
+                        track_file_processing(detected_file_type, success=False, error_type="skipped")
+                        logger.debug(f"  ⏭️  Skipped attachment: {filename}")
             except Exception as e:
-                logger.warning(f"  ⚠️  Failed to process attachment {filename}: {e}")
+                error_msg = str(e)
+                error_type = type(e).__name__
+                logger.warning(f"  ⚠️  Failed to process attachment {filename}: {error_msg}")
                 enriched_parts.append(f"<<< ATTACHMENT START: {filename} >>>")
                 if file_metadata:
                     metadata_str = f"File metadata: {file_metadata['file_type']}, {file_metadata['size']} bytes\n"
@@ -322,7 +495,17 @@ def enrich_session_with_files(
                 enriched_parts.append(f"[ERROR: Could not parse file {filename}]")
                 enriched_parts.append("<<< ATTACHMENT END >>>")
                 files_error += 1
-                track_file_processing(detected_file_type, success=False, error_type=type(e).__name__)
+                
+                # Track file failure in checkpoint
+                if checkpoint:
+                    checkpoint.mark_file_failed(
+                        file_path_str,
+                        error_msg,
+                        error_type,
+                        conversation_dir.name
+                    )
+                
+                track_file_processing(detected_file_type, success=False, error_type=error_type)
 
     if files_processed > 0:
         logger.debug(f"  File enrichment: {files_processed} processed, {files_skipped} skipped, {files_error} errors")
@@ -358,9 +541,11 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = DEFAULT_
 
     try:
         logger.info(f"💾 Initializing ChromaDB at {db_path}")
-        print(f"💾 Initializing ChromaDB database...")
+        print(f"💾 Initializing ChromaDB database...", flush=True)
+        sys.stdout.flush()
         
-        # Initialize persistent ChromaDB client
+        # Initialize persistent ChromaDB client (lazy import)
+        chromadb = _get_chromadb()
         client = chromadb.PersistentClient(path=str(db_path))
 
         # Get or create collection (idempotent)
@@ -430,8 +615,27 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = DEFAULT_
         logger.info(f"🔢 Generating embeddings and storing in ChromaDB...")
         print(f"🔢 Generating embeddings (this may take a moment)...")
         
-        # Upsert to ChromaDB (idempotent)
-        collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+        # Upsert to ChromaDB in batches (ChromaDB has a max batch size limit)
+        # Use batch size of 5000 to stay safely under the limit (5461)
+        batch_size = 5000
+        total_items = len(ids)
+        
+        for i in range(0, total_items, batch_size):
+            batch_ids = ids[i:i + batch_size]
+            batch_documents = documents[i:i + batch_size]
+            batch_metadatas = metadatas[i:i + batch_size]
+            
+            batch_num = (i // batch_size) + 1
+            total_batches = (total_items + batch_size - 1) // batch_size
+            
+            logger.info(f"  Storing batch {batch_num}/{total_batches} ({len(batch_ids)} items)...")
+            if total_batches > 1:
+                print(f"  Storing batch {batch_num}/{total_batches} ({len(batch_ids)} items)...", end="\r")
+            
+            collection.upsert(ids=batch_ids, documents=batch_documents, metadatas=batch_metadatas)
+        
+        if total_batches > 1:
+            print()  # New line after progress
 
         logger.info(f"✅ Stored {len(sessions)} sessions in ChromaDB at {db_path}")
         print(f"✅ Stored {len(sessions)} sessions in ChromaDB")
@@ -442,7 +646,7 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = DEFAULT_
         raise
 
 
-def main(export_path: Path, db_path: Optional[Path] = None) -> None:
+def main(export_path: Path, db_path: Optional[Path] = None, clear_checkpoint: bool = False) -> None:
     """
     Main ingestion entry point.
 
@@ -456,13 +660,42 @@ def main(export_path: Path, db_path: Optional[Path] = None) -> None:
     Args:
         export_path: Path to Slack export directory
         db_path: Optional path to ChromaDB directory (defaults to timestamped conductor_db)
+        clear_checkpoint: If True, clear checkpoint and start fresh
     """
+    # CRITICAL: Force immediate output with explicit flushing
+    import sys
+    
+    # Ensure unbuffered output
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(line_buffering=True)
+    
+    # Immediate output - use file=sys.stdout for explicit flushing
+    print("\n" + "=" * 80, file=sys.stdout, flush=True)
+    print("🚀 CONDUCTOR INGESTION PIPELINE", file=sys.stdout, flush=True)
+    print("=" * 80, file=sys.stdout, flush=True)
+    
     start_time = datetime.now()
     timestamp = start_time.strftime("%Y%m%d_%H%M%S")
     
     # Use default database path if not provided
     if db_path is None:
         db_path = DEFAULT_DB_PATH
+    
+    print(f"📂 Source: {export_path}", file=sys.stdout, flush=True)
+    print(f"💾 Database: {db_path}", file=sys.stdout, flush=True)
+    print(f"⏱️  Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}", file=sys.stdout, flush=True)
+    print("=" * 80 + "\n", file=sys.stdout, flush=True)
+    
+    # Also log for file-based logging
+    logger.info("=" * 80)
+    logger.info("INGESTION PIPELINE")
+    logger.info("=" * 80)
+    logger.info(f"📂 Source export: {export_path}")
+    logger.info(f"💾 Database path: {db_path}")
+    logger.info(f"⏱️  Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 80)
     
     logger.info("=" * 80)
     logger.info("INGESTION PIPELINE")
@@ -471,36 +704,36 @@ def main(export_path: Path, db_path: Optional[Path] = None) -> None:
     logger.info(f"💾 Database path: {db_path}")
     logger.info(f"⏱️  Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
-    print(f"\n🚀 Starting ingestion pipeline...")
-    print(f"📂 Source: {export_path}")
-    print(f"💾 Database: {db_path.name}")
-    print(f"⏱️  Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     # Step 1: Identity Mapping
+    print("📋 Step 1/5: Identity Mapping...", flush=True)
+    sys.stdout.flush()
     logger.info("=" * 80)
     logger.info("STEP 1: Identity Mapping")
     logger.info("=" * 80)
-    print("📋 Step 1/5: Identity Mapping...")
     try:
         logger.info("Loading user mappings from users.json...")
         user_map = load_users(export_path)
         logger.info(f"✅ Loaded {len(user_map)} users")
-        print(f"✅ Loaded {len(user_map)} users")
+        print(f"✅ Loaded {len(user_map)} users", flush=True)
+        sys.stdout.flush()
     except Exception as e:
         logger.exception(f"❌ Failed to load users: {e}")
         print(f"❌ Error loading users: {e}")
         raise
 
     # Step 2: Conversation Discovery
+    print("\n🔍 Step 2/5: Conversation Discovery...", flush=True)
+    sys.stdout.flush()
     logger.info("=" * 80)
     logger.info("STEP 2: Conversation Discovery")
     logger.info("=" * 80)
-    print("\n🔍 Step 2/5: Conversation Discovery...")
     try:
         logger.info("Scanning export directory for conversations...")
         conversations = discover_conversations(export_path)
         logger.info(f"✅ Discovered {len(conversations)} conversations")
-        print(f"✅ Discovered {len(conversations)} conversations")
+        print(f"✅ Discovered {len(conversations)} conversations", flush=True)
+        sys.stdout.flush()
         
         # Log conversation breakdown
         conv_types = {}
@@ -515,77 +748,263 @@ def main(export_path: Path, db_path: Optional[Path] = None) -> None:
         raise
 
     # Step 3 & 4: Process each conversation (Timeline, Sessionization, File Enrichment)
+    print(f"\n📝 Step 3-4/5: Processing conversations...", flush=True)
+    sys.stdout.flush()
     logger.info("=" * 80)
     logger.info("STEP 3 & 4: Timeline, Sessionization, and File Enrichment")
     logger.info("=" * 80)
-    print(f"\n📝 Step 3-4/5: Processing conversations...")
+    
+    # Initialize checkpoint manager for resume/retry
+    checkpoint = CheckpointManager()
+    
+    # Clear checkpoint if requested
+    if clear_checkpoint:
+        checkpoint.clear()
+        print("🗑️  Checkpoint cleared - starting fresh ingestion", flush=True)
+        logger.info("🗑️  Checkpoint cleared - starting fresh ingestion")
+    
+    checkpoint_stats = checkpoint.get_stats()
+    failed_files_stats = checkpoint.get_failed_files_stats()
+    
+    # Display checkpoint status
+    if checkpoint_stats["completed"] > 0 or checkpoint_stats["failed"] > 0 or len(failed_files_stats) > 0:
+        print(f"\n📊 Checkpoint Status:", flush=True)
+        if checkpoint_stats["completed"] > 0:
+            print(f"   ✅ {checkpoint_stats['completed']} conversations completed", flush=True)
+        if checkpoint_stats["failed"] > 0:
+            print(f"   ❌ {checkpoint_stats['failed']} conversations failed (will retry)", flush=True)
+        if len(failed_files_stats) > 0:
+            total_failed_files = sum(failed_files_stats.values())
+            print(f"   ⚠️  {total_failed_files} files failed (will retry):", flush=True)
+            for error_type, count in sorted(failed_files_stats.items(), key=lambda x: -x[1]):
+                print(f"      - {error_type}: {count}", flush=True)
+        print()
+    
+    # Get already processed channels from ChromaDB
+    already_processed_channels = get_already_processed_channels(db_path)
+    
+    # Filter conversations: skip completed, include failed for retry
+    conversations_to_process = {}
+    skipped_count = 0
+    retry_count = 0
+    
+    for dir_name, conv_type in conversations.items():
+        # Check if already completed in checkpoint
+        if checkpoint.is_completed(dir_name):
+            skipped_count += 1
+            logger.debug(f"⏭️  Skipping {dir_name} (already completed)")
+            continue
+        
+        # Check if channel already in ChromaDB (by checking if any sessions exist)
+        # We'll check this more precisely per conversation
+        conversations_to_process[dir_name] = conv_type
+        
+        # Count retries
+        if dir_name in checkpoint.get_failed():
+            retry_count += 1
+    
+    if skipped_count > 0:
+        print(f"⏭️  Skipping {skipped_count} already completed conversations", flush=True)
+        logger.info(f"⏭️  Skipping {skipped_count} already completed conversations")
+    
+    if retry_count > 0:
+        print(f"🔄 Retrying {retry_count} previously failed conversations", flush=True)
+        logger.info(f"🔄 Retrying {retry_count} previously failed conversations")
+    
+    if not conversations_to_process:
+        print("✅ All conversations already processed!", flush=True)
+        logger.info("✅ All conversations already processed!")
+        return
+    
+    print(f"📋 Processing {len(conversations_to_process)} conversations ({len(conversations)} total)", flush=True)
+    logger.info(f"📋 Processing {len(conversations_to_process)} conversations ({len(conversations)} total)")
+    
     all_sessions: List[Session] = []
     total_messages = 0
     total_files = 0
 
-    for idx, (dir_name, conversation_type) in enumerate(conversations.items(), 1):
-        conversation_dir = export_path / dir_name
-        logger.info(f"[{idx}/{len(conversations)}] Processing: {dir_name} ({conversation_type})")
-        print(f"  [{idx}/{len(conversations)}] Processing: {dir_name}...")
+    # Create elegant progress bar (Steve Jobs style)
+    # Detect if we're in a TTY (interactive terminal) or redirected to file
+    is_tty = sys.stdout.isatty() if hasattr(sys.stdout, 'isatty') else False
+    
+    if RICH_AVAILABLE and is_tty:
+        # Interactive terminal - use Rich progress bars
+        progress = Progress(
+            TextColumn("[bold cyan]{task.description}", justify="left"),
+            BarColumn(bar_width=None),
+            TaskProgressColumn(),  # Shows "x/y"
+            TextColumn("•", style="dim"),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%", style="bold"),
+            TextColumn("•", style="dim"),
+            TimeElapsedColumn(),
+            TextColumn("•", style="dim"),
+            TimeRemainingDaysColumn(),  # Custom: days:hours:minutes
+            console=Console(file=sys.stdout),
+            expand=True,
+        )
+        progress.start()
+        main_task = progress.add_task(
+            "[bold cyan]Processing conversations",
+            total=len(conversations_to_process)
+        )
+    else:
+        # File output or Rich not available - use simple logging
+        progress = None
+        main_task = None
+        print(f"📊 Processing {len(conversations_to_process)} conversations...", flush=True)
+        logger.info(f"📊 Processing {len(conversations_to_process)} conversations")
 
-        if not conversation_dir.exists():
-            logger.warning(f"⚠️  Conversation directory not found: {conversation_dir}")
-            print(f"     ⚠️  Directory not found, skipping")
-            continue
+    try:
+        for idx, (dir_name, conversation_type) in enumerate(conversations_to_process.items(), 1):
+            conversation_dir = export_path / dir_name
+            
+            # Update progress bar
+            if progress and main_task is not None:
+                progress.update(
+                    main_task,
+                    description=f"[bold cyan]{dir_name[:50]}",
+                    completed=idx - 1,
+                    refresh=True
+                )
+            elif not is_tty:
+                # Simple progress for file output - more frequent updates with ETA
+                pct = int((idx / len(conversations_to_process)) * 100)
+                elapsed = (datetime.now() - start_time).total_seconds()
+                if idx > 1:
+                    avg_time_per_conv = elapsed / idx
+                    remaining_convos = len(conversations_to_process) - idx
+                    eta_seconds = avg_time_per_conv * remaining_convos
+                    eta_days = int(eta_seconds // 86400)
+                    eta_hours = int((eta_seconds % 86400) // 3600)
+                    eta_mins = int((eta_seconds % 3600) // 60)
+                    if eta_days > 0:
+                        eta_str = f"{eta_days}d:{eta_hours:02d}h:{eta_mins:02d}m"
+                    else:
+                        eta_str = f"{eta_hours:02d}h:{eta_mins:02d}m"
+                    print(f"   [{idx}/{len(conversations_to_process)}] {pct}% | ETA: {eta_str} | {dir_name}", flush=True)
+                else:
+                    print(f"   [{idx}/{len(conversations_to_process)}] {pct}% | {dir_name}", flush=True)
+            
+            # Also log for file-based logging
+            logger.info(f"[{idx}/{len(conversations_to_process)}] Processing: {dir_name} ({conversation_type})")
 
-        try:
-            # Load messages from conversation directory
-            logger.debug(f"  Loading messages from {dir_name}...")
-            messages = load_messages_from_directory(conversation_dir)
-            total_messages += len(messages)
-
-            if not messages:
-                logger.debug(f"  No messages found in {dir_name}")
-                print(f"     ℹ️  No messages found, skipping")
+            if not conversation_dir.exists():
+                logger.warning(f"⚠️  Conversation directory not found: {conversation_dir}")
+                if progress and main_task is not None:
+                    progress.console.print(f"[yellow]⚠️  Directory not found, skipping[/]")
                 continue
 
-            logger.info(f"  Loaded {len(messages)} messages")
-            print(f"     📨 Loaded {len(messages)} messages")
+            try:
+                # Load messages from conversation directory
+                logger.debug(f"  Loading messages from {dir_name}...")
+                messages = load_messages_from_directory(conversation_dir)
+                total_messages += len(messages)
 
-            # Get channel name for session
-            channel_name = get_channel_name_for_session(dir_name, conversation_type)
+                if not messages:
+                    logger.debug(f"  No messages found in {dir_name}")
+                    if progress and main_task is not None:
+                        progress.console.print(f"[dim]ℹ️  No messages found, skipping[/]")
+                    continue
 
-            # Sessionize messages
-            logger.debug(f"  Sessionizing messages...")
-            sessions = sessionize_messages(messages, channel_name, conversation_type, user_map)
-            logger.info(f"  Created {len(sessions)} sessions")
-            print(f"     📦 Created {len(sessions)} sessions")
+                logger.info(f"  Loaded {len(messages)} messages")
+                if progress and main_task is not None:
+                    progress.console.print(f"[dim]📨 Loaded {len(messages)} messages[/]")
 
-            # Enrich each session with file content
-            logger.debug(f"  Enriching sessions with file content...")
-            enriched_sessions = []
-            files_in_conversation = 0
-            for session_idx, session in enumerate(sessions, 1):
-                # Get messages for this session (by matching timestamps)
-                session_start_ts = session.start_time.timestamp()
-                session_end_ts = session.end_time.timestamp()
-                session_messages = [
-                    msg
-                    for msg in messages
-                    if session_start_ts - 1.0 <= float(msg.ts) <= session_end_ts + 1.0
-                ]
-                enriched_session = enrich_session_with_files(session, session_messages, conversation_dir)
-                enriched_sessions.append(enriched_session)
-                files_in_conversation += enriched_session.file_count
+                # Get channel name for session
+                channel_name = get_channel_name_for_session(dir_name, conversation_type)
+
+                # Sessionize messages
+                logger.debug(f"  Sessionizing messages...")
+                sessions = sessionize_messages(messages, channel_name, conversation_type, user_map)
+                logger.info(f"  Created {len(sessions)} sessions")
+                if progress and main_task is not None:
+                    progress.console.print(f"[dim]📦 Created {len(sessions)} sessions[/]")
+
+                # Enrich each session with file content
+                logger.debug(f"  Enriching sessions with file content...")
+                enriched_sessions = []
+                files_in_conversation = 0
                 
-                if session_idx % 5 == 0 or session_idx == len(sessions):
-                    logger.debug(f"    Enriched {session_idx}/{len(sessions)} sessions")
+                # Nested progress for sessions (transient - disappears when done)
+                # Only use Rich if we're in a TTY
+                if RICH_AVAILABLE and is_tty and len(sessions) > 1:
+                    session_progress = Progress(
+                        TextColumn("[dim]{task.description}", justify="left"),
+                        BarColumn(bar_width=None),
+                        TaskProgressColumn(),
+                        TextColumn("•", style="dim"),
+                        TextColumn("[progress.percentage]{task.percentage:>3.0f}%", style="dim"),
+                        console=Console(file=sys.stdout),
+                        transient=True,  # Disappears when done
+                    )
+                    session_progress.start()
+                    session_task = session_progress.add_task(
+                        f"[dim]Enriching sessions",
+                        total=len(sessions)
+                    )
+                else:
+                    session_progress = None
+                    session_task = None
+                    if len(sessions) > 1:
+                        print(f"   📦 Enriching {len(sessions)} sessions...", flush=True)
+                
+                try:
+                    for session_idx, session in enumerate(sessions, 1):
+                        # Get messages for this session (by matching timestamps)
+                        session_start_ts = session.start_time.timestamp()
+                        session_end_ts = session.end_time.timestamp()
+                        session_messages = [
+                            msg
+                            for msg in messages
+                            if session_start_ts - 1.0 <= float(msg.ts) <= session_end_ts + 1.0
+                        ]
+                        enriched_session = enrich_session_with_files(session, session_messages, conversation_dir, checkpoint)
+                        enriched_sessions.append(enriched_session)
+                        files_in_conversation += enriched_session.file_count
+                        
+                        # Update session progress
+                        if session_progress and session_task is not None:
+                            session_progress.update(session_task, completed=session_idx, refresh=True)
+                        
+                        if session_idx % 5 == 0 or session_idx == len(sessions):
+                            logger.debug(f"    Enriched {session_idx}/{len(sessions)} sessions")
+                finally:
+                    if session_progress:
+                        session_progress.stop()
 
-            total_files += files_in_conversation
-            all_sessions.extend(enriched_sessions)
-            logger.info(f"  ✅ Processed {dir_name}: {len(enriched_sessions)} sessions, {files_in_conversation} files")
-            print(f"     ✅ {len(enriched_sessions)} sessions, {files_in_conversation} files processed")
+                total_files += files_in_conversation
+                all_sessions.extend(enriched_sessions)
+                logger.info(f"  ✅ Processed {dir_name}: {len(enriched_sessions)} sessions, {files_in_conversation} files")
+                
+                # Mark as completed in checkpoint
+                checkpoint.mark_completed(dir_name, len(enriched_sessions), files_in_conversation)
+                
+                # Update main progress
+                if progress and main_task is not None:
+                    progress.update(main_task, completed=idx, refresh=True)
+                elif not is_tty:
+                    # Simple progress for file output
+                    pct = int((idx / len(conversations_to_process)) * 100)
+                    print(f"   [{idx}/{len(conversations_to_process)}] {pct}% - {dir_name}", flush=True)
 
-        except Exception as e:
-            logger.error(f"  ❌ Failed to process conversation {dir_name}: {e}")
-            print(f"     ❌ Error processing: {e}")
-            # Continue processing other conversations - don't stop on errors
-            continue
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"  ❌ Failed to process conversation {dir_name}: {error_msg}")
+                if progress and main_task is not None:
+                    progress.console.print(f"[red]❌ Error processing {dir_name}: {error_msg}[/]")
+                else:
+                    print(f"   ❌ Error processing {dir_name}: {error_msg}", flush=True)
+                
+                # Mark as failed in checkpoint (for retry later)
+                checkpoint.mark_failed(dir_name, error_msg)
+                
+                # Continue processing other conversations - don't stop on errors
+                continue
+    finally:
+        if progress:
+            progress.stop()
+        elif not is_tty:
+            print(f"\n✅ Completed processing {len(conversations_to_process)} conversations", flush=True)
 
     logger.info(f"📊 Summary: {len(all_sessions)} sessions, {total_messages} messages, {total_files} files")
     print(f"\n📊 Summary: {len(all_sessions)} sessions, {total_messages} messages, {total_files} files")
@@ -628,15 +1047,74 @@ def main(export_path: Path, db_path: Optional[Path] = None) -> None:
 
 
 if __name__ == "__main__":
+    # CRITICAL: Write directly to stdout file descriptor for immediate output
     import sys
+    import os
+    
+    # Force unbuffered
+    os.environ['PYTHONUNBUFFERED'] = '1'
+    
+    # Write directly to file descriptor 1 (stdout) - bypasses Python buffering
+    try:
+        os.write(1, "🚀 Conductor ingestion starting...\n".encode('utf-8'))
+        os.fsync(1)
+    except:
+        sys.stdout.write("🚀 Conductor ingestion starting...\n")
+        sys.stdout.flush()
+    
+    try:
+        os.write(1, f"📋 Arguments: {sys.argv}\n".encode('utf-8'))
+        os.fsync(1)
+    except:
+        print(f"📋 Arguments: {sys.argv}", flush=True)
 
-    if len(sys.argv) != 2:
-        print("Usage: python -m conductor.ingest <path_to_slack_export>")
+    # Parse arguments
+    clear_checkpoint = False
+    if len(sys.argv) == 2:
+        export_path = Path(sys.argv[1])
+    elif len(sys.argv) == 3 and sys.argv[2] == "--clear-checkpoint":
+        export_path = Path(sys.argv[1])
+        clear_checkpoint = True
+    else:
+        try:
+            usage = "Usage: python -m conductor.ingest <path_to_slack_export> [--clear-checkpoint]\n"
+            os.write(2, usage.encode('utf-8'))
+            os.fsync(2)
+        except:
+            print("Usage: python -m conductor.ingest <path_to_slack_export> [--clear-checkpoint]", file=sys.stderr, flush=True)
         sys.exit(1)
-
-    export_path = Path(sys.argv[1])
+    try:
+        os.write(1, f"📂 Checking export path: {export_path}\n".encode('utf-8'))
+        os.fsync(1)
+    except:
+        print(f"📂 Checking export path: {export_path}", flush=True)
+    
     if not export_path.exists():
-        print(f"Error: Export path does not exist: {export_path}")
+        try:
+            os.write(2, f"❌ Error: Export path does not exist: {export_path}\n".encode('utf-8'))
+            os.fsync(2)
+        except:
+            print(f"❌ Error: Export path does not exist: {export_path}", file=sys.stderr, flush=True)
         sys.exit(1)
 
-    main(export_path)
+    try:
+        os.write(1, f"✅ Export path found: {export_path}\n".encode('utf-8'))
+        os.write(1, "🔄 Calling main()...\n".encode('utf-8'))
+        os.fsync(1)
+    except:
+        print(f"✅ Export path found: {export_path}", flush=True)
+        print("🔄 Calling main()...", flush=True)
+    
+    try:
+        main(export_path, clear_checkpoint=clear_checkpoint)
+    except Exception as e:
+        try:
+            os.write(2, f"❌ Fatal error: {e}\n".encode('utf-8'))
+            import traceback
+            os.write(2, traceback.format_exc().encode('utf-8'))
+            os.fsync(2)
+        except:
+            print(f"❌ Fatal error: {e}", file=sys.stderr, flush=True)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+        sys.exit(1)

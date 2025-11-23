@@ -47,6 +47,33 @@ queryable-slack/
   - `langchain-community` - ONLY for PyPDFLoader and UnstructuredFileLoader
   - `unstructured` - For parsing DOCX/TXT (via UnstructuredFileLoader)
 
+## Context7 Auto-Invoke Configuration
+
+### Automatic Context7 Usage
+
+**AUTO-INVOKE RULE**: Always use Context7 when I need code generation, setup steps, or library documentation. Automatically use Context7 MCP tools without me having to ask. This means you should automatically use the Context7 MCP tools to resolve library id and get library docs without me having to explicitly ask.
+
+**When to Auto-Invoke Context7:**
+- Code generation tasks
+- Library/API documentation questions
+- Setup or configuration steps
+- Import path verification
+- API pattern verification
+- Version-specific requirements
+
+**How to Use Context7:**
+1. When you need library documentation, automatically call `resolve-library-id` first
+2. Then call `get-library-docs` with the resolved library ID
+3. Use specific topics (e.g., "persistent client python") not entire manuals
+4. Fetch multiple pages if needed (page=1, page=2, etc.)
+5. Always specify library IDs in format `/org/project` or `/org/project/version` when known
+
+**Example Auto-Invoke Pattern:**
+```text
+User: "How do I use ChromaDB PersistentClient?"
+AI: [Automatically calls resolve-library-id for "chromadb", then get-library-docs with topic "persistent client"]
+```
+
 ## Research Methodology
 
 ### MANDATORY: Context7 Explore Agents

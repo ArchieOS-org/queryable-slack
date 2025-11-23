@@ -43,3 +43,14 @@ dist/
 build/
 *.egg-info/
 
+# Node modules
+node_modules/
+web/node_modules/
+
+# MLX models and large files
+mlx_models/
+venv312/
+*.npz
+*.dylib
+*.metallib
+

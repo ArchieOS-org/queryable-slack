@@ -1,0 +1,39 @@
+# Cursor Rules for Queryable Slack Project
+
+## Context7 Auto-Invoke Rules
+
+Always use Context7 when I need code generation, setup steps, or library documentation. 
+Automatically use Context7 MCP tools without me having to ask. This means you should 
+automatically use the Context7 MCP tools to resolve library id and get library docs 
+without me having to explicitly ask.
+
+## When to Auto-Invoke Context7
+
+- Code generation tasks
+- Library/API documentation questions  
+- Setup or configuration steps
+- Import path verification
+- API pattern verification
+- Version-specific requirements
+
+## Context7 Usage Pattern
+
+1. When library documentation is needed, automatically call `resolve-library-id` first
+2. Then call `get-library-docs` with the resolved library ID
+3. Use specific topics (e.g., "persistent client python") not entire manuals
+4. Fetch multiple pages if needed (page=1, page=2, etc.)
+5. Always specify library IDs in format `/org/project` or `/org/project/version` when known
+
+## Project-Specific Guidelines
+
+- Always use Pydantic v2 for data models
+- Use ChromaDB PersistentClient for vector storage
+- Follow the 4-phase lifecycle: Explore → Plan → Implement → Review
+- Never skip Context7 research before implementing code
+- Use explore agents in parallel for efficiency
+
+## Example Auto-Invoke
+
+User: "How do I use ChromaDB PersistentClient?"
+AI: [Automatically calls resolve-library-id for "chromadb", then get-library-docs with topic "persistent client"]
+

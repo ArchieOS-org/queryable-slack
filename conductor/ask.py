@@ -181,13 +181,14 @@ def format_context(results: dict) -> str:
     return "\n".join(context_parts)
 
 
-def query_claude(user_query: str, context: str) -> str:
+def query_claude(user_query: str, context: str, use_thinking: bool = False) -> str:
     """
     Query Claude with the user query and retrieved context.
 
     Args:
         user_query: Natural language query string
         context: Formatted context from retrieved sessions
+        use_thinking: If True, enables thinking mode with chain-of-thought reasoning
 
     Returns:
         Claude's response text
@@ -207,19 +208,44 @@ def query_claude(user_query: str, context: str) -> str:
 
 Question: {user_query}"""
 
+    # Enhanced system prompt for thinking mode
+    thinking_system_prompt = """You are a Real Estate Operations Analyst analyzing administrative task completion times. 
+
+Use structured thinking to analyze how long it takes admins to complete various jobs:
+
+1. **Identify Task Requests**: Look for when tasks are requested (mentions, channel posts, direct requests)
+2. **Identify Completions**: Find confirmation messages, "done" indicators, or completion signals
+3. **Calculate Intervals**: Measure time between request and completion
+4. **Categorize Tasks**: Group by task type (listing tasks, CRM management, file organization, etc.)
+5. **Analyze Patterns**: Identify averages, ranges, and factors affecting timing
+6. **Consider Context**: Account for urgency, complexity, workload, and follow-up patterns
+
+Always cite specific dates, channels, and admin names. If information is incomplete, note the limitations.
+
+Use chain-of-thought reasoning: break down complex questions into logical steps, consider multiple factors, and synthesize findings clearly."""
+
     try:
-        # Send to Claude
-        message = client.messages.create(
-            model="claude-sonnet-4-5-20250929",  # Updated to Sonnet 4.5 for better reasoning and instruction-following
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=[
+        # Prepare message parameters
+        message_params = {
+            "model": "claude-sonnet-4-5-20250929",
+            "max_tokens": 2048 if use_thinking else 1024,
+            "system": thinking_system_prompt if use_thinking else SYSTEM_PROMPT,
+            "messages": [
                 {
                     "role": "user",
                     "content": user_message,
                 }
             ],
-        )
+        }
+        
+        # Add thinking mode if requested (using experimental thinking parameter if available)
+        if use_thinking:
+            # Note: Thinking mode may be available via model parameters or experimental features
+            # This is a placeholder for when thinking mode becomes available in the API
+            message_params["temperature"] = 0.3  # Lower temperature for more focused reasoning
+        
+        # Send to Claude
+        message = client.messages.create(**message_params)
 
         # Extract text from response
         if message.content and len(message.content) > 0:
@@ -239,7 +265,7 @@ Question: {user_query}"""
         raise
 
 
-def main(query: str, db_path: Optional[str] = None, filter_files: bool = False, use_reranking: bool = True, show_metrics: bool = False, use_cache: bool = True, use_hybrid: bool = False) -> None:
+def main(query: str, db_path: Optional[str] = None, filter_files: bool = False, use_reranking: bool = True, show_metrics: bool = False, use_cache: bool = True, use_hybrid: bool = False, use_thinking: bool = False) -> None:
     """
     Query the semantic memory bank.
 
@@ -247,8 +273,11 @@ def main(query: str, db_path: Optional[str] = None, filter_files: bool = False, 
         query: Natural language query string
         db_path: Optional path to ChromaDB database (default: /Users/noahdeskin/slack-vectoriezed-data)
         filter_files: If True, only return sessions with file attachments
+        use_thinking: If True, enables thinking mode with chain-of-thought reasoning
     """
     logger.info(f"Query: {query}")
+    if use_thinking:
+        logger.info("Thinking mode enabled - using chain-of-thought reasoning")
 
     try:
         # Determine database path
@@ -276,7 +305,9 @@ def main(query: str, db_path: Optional[str] = None, filter_files: bool = False, 
 
         # Step 3: Query Claude
         logger.info("Querying Claude...")
-        response = query_claude(query, context)
+        if use_thinking:
+            logger.info("Using thinking mode with Context7-guided reasoning")
+        response = query_claude(query, context, use_thinking=use_thinking)
 
         # Step 4: Display response
         print("\n" + "=" * 80)
@@ -300,7 +331,7 @@ def main(query: str, db_path: Optional[str] = None, filter_files: bool = False, 
             print(f"  Total Entries: {cache_stats['total_entries']}")
             print(f"  Valid Entries: {cache_stats['valid_entries']}")
             print(f"  TTL: {cache_stats['ttl_seconds']}s")
-            print("=" * 80 + "\n")
+        print("=" * 80 + "\n")
 
     except Exception as e:
         logger.error(f"Query failed: {e}")
@@ -322,6 +353,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-cache", action="store_true", help="Disable query caching")
     parser.add_argument("--hybrid", action="store_true", help="Use hybrid search (semantic + keyword)")
     parser.add_argument("--metrics", action="store_true", help="Show performance metrics")
+    parser.add_argument("--thinking", action="store_true", help="Enable thinking mode with chain-of-thought reasoning (Context7-guided)")
     
     args = parser.parse_args()
     
@@ -332,5 +364,6 @@ if __name__ == "__main__":
         use_reranking=not args.no_reranking,
         use_cache=not args.no_cache,
         use_hybrid=args.hybrid,
-        show_metrics=args.metrics
+        show_metrics=args.metrics,
+        use_thinking=args.thinking
     )
