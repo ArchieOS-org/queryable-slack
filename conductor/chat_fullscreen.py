@@ -8,7 +8,11 @@ Uses Context7 best practices:
 - Live updates with screen=True
 """
 
+# CRITICAL: Set TOKENIZERS_PARALLELISM before any tokenizer imports
+# This prevents warnings when tokenizers are used after forking
 import os
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+
 import sys
 import re
 from pathlib import Path
@@ -334,7 +338,10 @@ def process_query(
     use_cache: bool = True,
     use_reranking: bool = True,
     where_filter: Optional[Dict] = None,
-    use_refinement: bool = True
+    use_refinement: bool = True,
+    use_deep_research: bool = True,
+    deep_research_n_results: int = 50,
+    max_final_results: int = 40
 ) -> tuple[str, str]:
     """Process a single query."""
     # Step 1: Query ChromaDB (system prompt handles query understanding)
@@ -343,8 +350,11 @@ def process_query(
         db_path=db_path,
         where=where_filter,
         use_reranking=use_reranking,
-        use_cache=use_cache,
-        use_hybrid=use_hybrid
+        use_cache=use_cache if not use_deep_research else False,  # Disable cache for deep research
+        use_hybrid=use_hybrid or use_deep_research,  # Use hybrid in deep research
+        use_deep_research=use_deep_research,
+        deep_research_n_results=deep_research_n_results,
+        max_final_results=max_final_results
     )
     
     # Step 2: Format context
@@ -384,6 +394,9 @@ def chat_loop(
     use_cache = True
     use_reranking = True
     use_refinement = True
+    use_deep_research = True  # Enable deep research by default
+    deep_research_n_results = 50
+    max_final_results = 40
     query_count = 0
     chat_history: List[tuple] = []  # (user_query, response, refined_query)
     scrollable_content = ScrollableContent()
@@ -409,6 +422,7 @@ Commands:
   /hybrid        Toggle hybrid search
   /thinking      Toggle thinking mode
   /refinement    Toggle query refinement
+  /deep-research Toggle exhaustive deep research mode (multi-query + RRF)
 """
         
         scrollable_content.set_content(welcome_text)
@@ -504,6 +518,12 @@ Examples:
                         console.print(f"[green]Query refinement {status}[/green]")
                         screen.update(layout)
                         continue
+                    elif command == "/deep-research":
+                        use_deep_research = not use_deep_research
+                        status = "enabled" if use_deep_research else "disabled"
+                        console.print(f"[green]Deep research mode {status}[/green]")
+                        screen.update(layout)
+                        continue
                     else:
                         console.print(f"[yellow]Unknown command: {command}. Type /help for help.[/yellow]")
                         screen.update(layout)
@@ -527,7 +547,10 @@ Examples:
                         use_hybrid=use_hybrid,
                         use_cache=use_cache,
                         use_reranking=use_reranking,
-                        use_refinement=use_refinement
+                        use_refinement=use_refinement,
+                        use_deep_research=use_deep_research,
+                        deep_research_n_results=deep_research_n_results,
+                        max_final_results=max_final_results
                     )
                     
                     # Add to history

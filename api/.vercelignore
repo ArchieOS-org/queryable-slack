@@ -1,0 +1,8 @@
+# Ignore files in API directory that shouldn't be deployed
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+

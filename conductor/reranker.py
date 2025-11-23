@@ -4,6 +4,11 @@ Query result reranking using cross-encoder models.
 Improves relevance of search results by reranking initial semantic search results.
 """
 
+# CRITICAL: Set TOKENIZERS_PARALLELISM before any tokenizer imports
+# This prevents warnings when tokenizers are used after forking
+import os
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+
 import logging
 from typing import List, Dict, Any, Tuple
 from pathlib import Path

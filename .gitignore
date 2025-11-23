@@ -54,3 +54,4 @@ venv312/
 *.dylib
 *.metallib
 
+.vercel

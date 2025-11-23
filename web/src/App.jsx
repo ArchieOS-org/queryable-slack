@@ -9,14 +9,22 @@ import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-// Detect API URL based on hostname
-// If accessing from mobile device on local network, use the Mac's IP
-// Otherwise use localhost for desktop development
+// Detect API URL based on environment
+// For Vercel deployment, use the same domain
+// For local development, use localhost:8000
 const getApiUrl = () => {
-  // Check if we're on a mobile device or accessing via IP
-  const hostname = window.location.hostname
+  // Check if we're in production (Vercel)
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL
+  }
   
-  // If accessing via IP address (not localhost), use that IP for API
+  // Check if we're on Vercel domain
+  const hostname = window.location.hostname
+  if (hostname.includes('vercel.app') || hostname.includes('vercel.com')) {
+    return `https://${hostname}/api`
+  }
+  
+  // Check if accessing via IP address (local network)
   if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
     return `http://${hostname}:8000`
   }

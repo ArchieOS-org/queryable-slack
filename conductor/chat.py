@@ -5,7 +5,11 @@ Each message is a fresh call to the vector database with thinking mode.
 Beautiful markdown output that adapts to terminal size.
 """
 
+# CRITICAL: Set TOKENIZERS_PARALLELISM before any tokenizer imports
+# This prevents warnings when tokenizers are used after forking
 import os
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+
 import sys
 from pathlib import Path
 from typing import Optional, Dict
@@ -160,7 +164,10 @@ def process_query(
     use_cache: bool = True,
     use_reranking: bool = True,
     where_filter: Optional[Dict] = None,
-    use_refinement: bool = True
+    use_refinement: bool = True,
+    use_deep_research: bool = True,
+    deep_research_n_results: int = 50,
+    max_final_results: int = 40
 ) -> tuple[str, str]:
     """
     Process a single query - fresh call every time, no memory.
@@ -190,8 +197,11 @@ def process_query(
         db_path=db_path,
         where=where_filter,
         use_reranking=use_reranking,
-        use_cache=use_cache,
-        use_hybrid=use_hybrid
+        use_cache=use_cache if not use_deep_research else False,  # Disable cache for deep research
+        use_hybrid=use_hybrid or use_deep_research,  # Use hybrid in deep research
+        use_deep_research=use_deep_research,
+        deep_research_n_results=deep_research_n_results,
+        max_final_results=max_final_results
     )
     
     # Step 2: Format context
@@ -220,6 +230,7 @@ def display_help():
   /thinking      Toggle thinking mode
   /cache         Toggle query caching
   /refinement    Toggle query refinement (Context7-guided)
+  /deep-research Toggle exhaustive deep research mode (multi-query + RRF)
 
 [bold cyan]Usage:[/bold cyan]
   Just type your question and press Enter. Each query is a fresh call to the vector database.
@@ -260,6 +271,9 @@ def chat_loop(
     use_cache = True
     use_reranking = True
     use_refinement = True  # Enable query refinement by default
+    use_deep_research = True  # Enable deep research by default
+    deep_research_n_results = 50
+    max_final_results = 40
     query_count = 0
     
     # Clear screen and show welcome
@@ -336,6 +350,11 @@ Type your question or '/help' for commands.
                     status = "enabled" if use_refinement else "disabled"
                     console.print(f"[green]Query refinement {status}[/green]")
                     continue
+                elif command == "/deep-research":
+                    use_deep_research = not use_deep_research
+                    status = "enabled" if use_deep_research else "disabled"
+                    console.print(f"[green]Deep research mode {status}[/green]")
+                    continue
                 else:
                     console.print(f"[yellow]Unknown command: {command}. Type /help for help.[/yellow]")
                     continue
@@ -357,7 +376,7 @@ Type your question or '/help' for commands.
                     loading_layout["footer"].update(create_footer(f"Step 1/4: Refining query..."))
                     live.update(loading_layout)
                     
-                    # Process query (now includes refinement)
+                    # Process query (now includes refinement and deep research)
                     response, refined_query = process_query(
                         query=user_input,
                         db_path=db_path_obj,
@@ -365,7 +384,10 @@ Type your question or '/help' for commands.
                         use_hybrid=use_hybrid,
                         use_cache=use_cache,
                         use_reranking=use_reranking,
-                        use_refinement=True
+                        use_refinement=True,
+                        use_deep_research=use_deep_research,
+                        deep_research_n_results=deep_research_n_results,
+                        max_final_results=max_final_results
                     )
                     
                     # Display result with refined query info
