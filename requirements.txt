@@ -6,6 +6,7 @@ pydantic>=2.0,<3.0
 
 # Vector database
 chromadb>=0.4.0
+vecs>=0.4.0  # Supabase pgvector client
 
 # LLM SDK
 anthropic>=0.34.0

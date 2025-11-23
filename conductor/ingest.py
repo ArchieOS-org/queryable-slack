@@ -528,17 +528,24 @@ def enrich_session_with_files(
 
 def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = DEFAULT_DB_PATH) -> None:
     """
-    Store sessions in ChromaDB for vector search.
+    Store sessions in vector database (ChromaDB or Supabase vecs).
 
     Args:
         sessions: List of Session objects to store
-        db_path: Path to ChromaDB persistent storage directory
+        db_path: Path to ChromaDB persistent storage directory (ignored if using vecs)
     """
     if not sessions:
         logger.info("⚠️  No sessions to store")
         print("⚠️  No sessions to store")
         return
 
+    # Check if we should use vecs (Supabase)
+    from conductor.config import USE_VECS
+    if USE_VECS:
+        _store_sessions_in_vecs(sessions)
+        return
+
+    # Otherwise use ChromaDB
     try:
         logger.info(f"💾 Initializing ChromaDB at {db_path}")
         print(f"💾 Initializing ChromaDB database...", flush=True)
@@ -628,7 +635,6 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = DEFAULT_
             batch_num = (i // batch_size) + 1
             total_batches = (total_items + batch_size - 1) // batch_size
             
-            logger.info(f"  Storing batch {batch_num}/{total_batches} ({len(batch_ids)} items)...")
             if total_batches > 1:
                 print(f"  Storing batch {batch_num}/{total_batches} ({len(batch_ids)} items)...", end="\r")
             
@@ -642,6 +648,107 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = DEFAULT_
 
     except Exception as e:
         logger.exception(f"❌ Failed to store sessions in ChromaDB: {e}")
+        print(f"❌ Error storing sessions: {e}")
+        raise
+
+
+def _store_sessions_in_vecs(sessions: List[Session]) -> None:
+    """
+    Store sessions in Supabase vecs (pgvector) for vector search.
+    
+    Args:
+        sessions: List of Session objects to store
+    """
+    try:
+        from conductor.vecs_client import upsert_vecs
+        from conductor.chunking import should_chunk_session, chunk_session
+        
+        logger.info("💾 Initializing Supabase vecs (pgvector)...")
+        print(f"💾 Initializing Supabase vecs database...", flush=True)
+        sys.stdout.flush()
+        
+        # Prepare data for upsert (with chunking support)
+        logger.info(f"📝 Preparing {len(sessions)} sessions for storage...")
+        print(f"📝 Preparing {len(sessions)} sessions for vector storage...")
+        records = []
+        chunked_count = 0
+        
+        for idx, session in enumerate(sessions, 1):
+            if idx % 10 == 0 or idx == len(sessions):
+                logger.debug(f"  Preparing session {idx}/{len(sessions)}: {session.channel_name}")
+                print(f"  Processing session {idx}/{len(sessions)}...", end="\r")
+            
+            # Check if session needs chunking
+            if should_chunk_session(session):
+                chunks = chunk_session(session)
+                chunked_count += 1
+                logger.debug(f"  Chunked session {session.session_id} into {len(chunks)} chunks")
+                
+                for chunk in chunks:
+                    metadata = {
+                        "date": chunk["start_time"].date().isoformat(),
+                        "channel": chunk["channel_name"],
+                        "start_time": chunk["start_time"].isoformat(),
+                        "end_time": chunk["end_time"].isoformat(),
+                        "message_count": chunk["message_count"],
+                        "file_count": chunk["file_count"],
+                        "conversation_type": chunk["conversation_type"],
+                        "session_id": chunk["session_id"],
+                        "chunk_index": chunk["chunk_index"],
+                        "total_chunks": chunk["total_chunks"],
+                    }
+                    records.append((
+                        chunk["chunk_id"],
+                        chunk["enriched_transcript"],
+                        metadata
+                    ))
+            else:
+                # Regular session, no chunking needed
+                metadata = {
+                    "date": session.start_time.date().isoformat(),
+                    "channel": session.channel_name,
+                    "start_time": session.start_time.isoformat(),
+                    "end_time": session.end_time.isoformat(),
+                    "message_count": session.message_count,
+                    "file_count": session.file_count,
+                    "conversation_type": session.conversation_type,
+                }
+                records.append((
+                    session.session_id,
+                    session.enriched_transcript,
+                    metadata
+                ))
+        
+        if chunked_count > 0:
+            logger.info(f"📦 Chunked {chunked_count} large sessions")
+            print(f"📦 Chunked {chunked_count} large sessions")
+        
+        print()  # New line after progress
+        logger.info(f"🔢 Generating embeddings and storing in Supabase vecs...")
+        print(f"🔢 Generating embeddings (this may take a moment)...")
+        
+        # Upsert to vecs in batches (vecs handles batching internally, but we'll batch for progress tracking)
+        batch_size = 1000  # Reasonable batch size for vecs
+        total_items = len(records)
+        total_batches = (total_items + batch_size - 1) // batch_size
+        
+        for i in range(0, total_items, batch_size):
+            batch_records = records[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            
+            if total_batches > 1:
+                print(f"  Storing batch {batch_num}/{total_batches} ({len(batch_records)} items)...", end="\r")
+            
+            upsert_vecs(batch_records)
+        
+        if total_batches > 1:
+            print()  # New line after progress
+        
+        logger.info(f"✅ Stored {len(sessions)} sessions in Supabase vecs")
+        print(f"✅ Stored {len(sessions)} sessions in Supabase vecs")
+        
+    except Exception as e:
+        logger.exception(f"❌ Failed to store sessions in vecs: {e}")
         print(f"❌ Error storing sessions: {e}")
         raise
 

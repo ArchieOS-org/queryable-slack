@@ -23,9 +23,13 @@ from conductor.reranker import rerank_results
 from conductor.monitoring import track_query, get_metrics_summary
 from conductor.cache import cached_query, get_cache_stats
 from conductor.hybrid_search import hybrid_search
-from conductor.config import DEFAULT_DB_PATH, CHROMADB_URL
+from conductor.config import DEFAULT_DB_PATH, CHROMADB_URL, USE_VECS
 from conductor.multi_query import generate_query_variations
 from conductor.rank_fusion import fuse_chromadb_results
+
+# Import vecs client if using Supabase
+if USE_VECS:
+    from conductor.vecs_client import query_vecs as _query_vecs_impl_vecs
 
 # Load environment variables from .env file
 load_dotenv()
@@ -62,6 +66,23 @@ def _query_chromadb_impl(
         Dictionary with query results containing ids, documents, metadatas, distances
     """
     try:
+        # Use vecs (Supabase pgvector) if DATABASE_URL is set
+        if USE_VECS:
+            # Convert ChromaDB-style filters to vecs format
+            vecs_filters = {}
+            if where:
+                # Convert ChromaDB where clause to vecs filters
+                # ChromaDB: {"date": {"$eq": "2024-01-01"}}
+                # Vecs: {"date": {"$eq": "2024-01-01"}} (same format!)
+                vecs_filters = where
+            
+            return _query_vecs_impl_vecs(
+                query_text=user_query,
+                n_results=n_results,
+                filters=vecs_filters if vecs_filters else None
+            )
+        
+        # Otherwise use ChromaDB
         # Initialize ChromaDB client
         # Use HTTP client if CHROMADB_URL is set (for Vercel/serverless)
         # Otherwise use PersistentClient (for local development)
@@ -173,15 +194,24 @@ def query_chromadb_deep_research(
         logger.info(f"Query variation {i}/{len(query_variations)}: {query_var[:60]}...")
         
         try:
-            # Run hybrid search (which combines vector + BM25 internally)
-            hybrid_result = hybrid_search(
-                query_var,
-                db_path,
-                n_results=deep_research_n_results,
-                where=where,
-                semantic_weight=0.6,  # 60% vector, 40% BM25
-                keyword_weight=0.4
-            )
+            # Use vecs if available, otherwise use hybrid search
+            if USE_VECS:
+                vecs_filters = where if where else {}
+                hybrid_result = _query_vecs_impl_vecs(
+                    query_text=query_var,
+                    n_results=deep_research_n_results,
+                    filters=vecs_filters if vecs_filters else None
+                )
+            else:
+                # Run hybrid search (which combines vector + BM25 internally)
+                hybrid_result = hybrid_search(
+                    query_var,
+                    db_path,
+                    n_results=deep_research_n_results,
+                    where=where,
+                    semantic_weight=0.6,  # 60% vector, 40% BM25
+                    keyword_weight=0.4
+                )
             
             if hybrid_result.get("documents") and hybrid_result["documents"][0]:
                 num_results = len(hybrid_result["documents"][0])

@@ -120,28 +120,33 @@ async def query_endpoint(request: QueryRequest):
     4. Returns the response
     """
     try:
-        # Determine database path
-        # On Vercel, check for CHROMADB_URL (HTTP client) or use /tmp
-        # For local development, use the provided path or default
-        if os.environ.get('VERCEL'):
-            # On Vercel, prefer HTTP client mode if CHROMADB_URL is set
-            if os.environ.get('CHROMADB_URL'):
-                db_path_obj = None  # Will use HTTP client
+        # Check if using vecs (Supabase pgvector) or ChromaDB
+        from conductor.config import USE_VECS
+        
+        # Determine database path (only needed for ChromaDB mode)
+        db_path_obj = None
+        if not USE_VECS:
+            # ChromaDB mode - determine path
+            if os.environ.get('VERCEL'):
+                # On Vercel, prefer HTTP client mode if CHROMADB_URL is set
+                if os.environ.get('CHROMADB_URL'):
+                    db_path_obj = None  # Will use HTTP client
+                else:
+                    # Use /tmp/chromadb (ephemeral, needs data download)
+                    db_path_obj = Path(os.environ.get('CHROMADB_PATH', '/tmp/chromadb'))
             else:
-                # Use /tmp/chromadb (ephemeral, needs data download)
-                db_path_obj = Path(os.environ.get('CHROMADB_PATH', '/tmp/chromadb'))
-        else:
-            # Local development
-            db_path_obj = Path(request.db_path) if request.db_path else DEFAULT_DB_PATH
+                # Local development
+                db_path_obj = Path(request.db_path) if request.db_path else DEFAULT_DB_PATH
+            
+            # Only check path existence if not using HTTP client
+            if db_path_obj and not db_path_obj.exists():
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"Database not found: {db_path_obj}. On Vercel, ensure DATABASE_URL is set for Supabase vecs or CHROMADB_URL is set for ChromaDB HTTP client."
+                )
         
-        # Only check path existence if not using HTTP client
-        if db_path_obj and not db_path_obj.exists():
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Database not found: {db_path_obj}. On Vercel, ensure CHROMADB_URL is set or upload data to Supabase Storage."
-            )
-        
-        # Step 1: Query ChromaDB (system prompt handles query understanding)
+        # Step 1: Query vector database (vecs or ChromaDB - automatically selected)
+        # System prompt handles query understanding
         results = query_chromadb(
             request.query,
             db_path=db_path_obj,
