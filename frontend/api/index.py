@@ -79,7 +79,7 @@ class handler(BaseHTTPRequestHandler):
             path = parsed_path.path
             
             # Query endpoint - semantic search with Claude
-            if path == '/api/query':
+            if path == '/api/query' or path == '/api/index' or path == '/':
                 self.handle_semantic_query()
                 return
             
