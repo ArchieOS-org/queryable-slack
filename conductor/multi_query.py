@@ -72,7 +72,7 @@ def generate_query_variations(user_query: str, num_variations: int = 7) -> List[
     try:
         logger.debug("Calling Claude API for query generation...")
         message = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+            model="claude-sonnet-4-20250514",  # Use correct Sonnet 4 model ID
             max_tokens=500,
             temperature=0.7,
             messages=[
