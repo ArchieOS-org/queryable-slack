@@ -44,9 +44,20 @@ export async function POST(req: Request) {
     const apiUrl = new URL('/api/index', req.url);
     console.log('[' + requestId + '] Fetching from: ' + apiUrl.toString());
 
+    // Include Vercel deployment protection bypass header (free tier)
+    const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+
+    if (bypassSecret) {
+      headers['x-vercel-protection-bypass'] = bypassSecret;
+      console.log('[' + requestId + '] Using deployment protection bypass');
+    }
+
     const response = await fetch(apiUrl.toString(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         query,
         match_count: 5
