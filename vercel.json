@@ -1,38 +1,31 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "web/package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
-    },
-    {
-      "src": "api/index.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "api/migrate.py",
-      "use": "@vercel/python"
+  "outputDirectory": "web/dist",
+  "functions": {
+    "api/**/*.py": {
+      "includeFiles": "{conductor/**,web_api.py}"
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/api/migrate",
-      "dest": "/api/migrate.py"
+      "source": "/api/debug",
+      "destination": "/api/debug.py"
     },
     {
-      "src": "/api/(.*)",
-      "dest": "/api/index.py"
+      "source": "/api/test",
+      "destination": "/api/test.py"
     },
     {
-      "src": "/(.*)",
-      "dest": "/web/$1"
+      "source": "/api/migrate",
+      "destination": "/api/migrate.py"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/web/$1"
     }
-  ],
-  "env": {
-    "PYTHON_VERSION": "3.12"
-  }
+  ]
 }
-

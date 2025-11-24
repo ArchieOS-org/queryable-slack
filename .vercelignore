@@ -1,110 +1,14 @@
-# Files to ignore in Vercel deployment
-
-# Virtual environments
+requirements.txt
+manado/
+conductor_db/
+conductor_db_preview_*/
 venv/
 venv311/
 venv312/
+.git/
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.Python
-
-# Local development files
-.env.local
-.env.development
-.env.test
-
-# Database files (will be in Supabase)
-conductor_db/
-conductor_db_*/
-*.sqlite
-*.sqlite3
-*.db
-
-# Test files
-tests/
-*.test.py
-*.spec.py
-pytest.ini
-
-# Documentation (keep README only)
-*.md
-!README.md
-DEPLOYMENT.md
-QUICK_DEPLOY.md
-GET_CREDENTIALS.md
-NEXT_STEPS.md
-SETUP_CREDENTIALS.md
-GET_DB_PASSWORD.md
-
-# Git
-.git/
-.gitignore
-.gitattributes
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*.sublime-*
-
-# Build artifacts
-dist/
-build/
-*.egg-info/
-*.egg
-
-# Logs
-*.log
-logs/
-*.log.*
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-*.cache
-
-# macOS
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# Node modules (will be installed by Vercel)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Manado data (too large for deployment)
-manado/
 mlx_models/
-
-# Large data files
-*.mp4
-*.mov
-*.avi
-*.mkv
-*.webm
-*.flv
-*.wmv
-*.zip
-*.tar
-*.tar.gz
-*.gz
-
-# Python cache
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Supabase local files
-supabase/.branches/
-supabase/.temp/
-
+web/node_modules/
+web/dist/
