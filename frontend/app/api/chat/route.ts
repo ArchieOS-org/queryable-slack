@@ -29,7 +29,7 @@ export async function POST(req: Request) {
     const query = lastMessage.content;
     console.log('[' + requestId + '] Query: "' + query + '"');
 
-    const apiUrl = new URL('/api/query', req.url);
+    const apiUrl = new URL('/api/index', req.url);
     console.log('[' + requestId + '] Fetching from: ' + apiUrl.toString());
 
     const response = await fetch(apiUrl.toString(), {
