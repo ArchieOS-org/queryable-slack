@@ -89,6 +89,16 @@ class handler(BaseHTTPRequestHandler):
                 "message": str(e)
             })
 
+    
+    def do_OPTIONS(self):
+        """Handle CORS preflight OPTIONS requests"""
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Access-Control-Max-Age', '86400')  # Cache preflight for 24 hours
+        self.end_headers()
+
     def handle_health_check(self):
         """Health check endpoint"""
         try:
