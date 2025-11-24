@@ -322,9 +322,9 @@ class handler(BaseHTTPRequestHandler):
                 context_parts.append("")
                 
                 sources.append({
-                    "date": metadata.get('date'),
-                    "channel": metadata.get('channel'),
-                    "message_count": metadata.get('message_count')
+                    "date": metadata.get('date') or 'Unknown',
+                    "channel": metadata.get('channel') or 'Unknown',
+                    "message_count": metadata.get('message_count') or 0
                 })
             
             context = "\n".join(context_parts)
