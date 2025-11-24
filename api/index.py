@@ -4,10 +4,18 @@ Integrates with conductor.supabase_query module for semantic search
 Uses Vercel AI Gateway for embeddings
 """
 
+import sys
+import os
+from pathlib import Path
+
+# Add parent directory to Python path for conductor package imports
+current_dir = Path(__file__).parent
+parent_dir = current_dir.parent
+sys.path.insert(0, str(parent_dir))
+
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import json
-import os
 
 
 class handler(BaseHTTPRequestHandler):
@@ -71,7 +79,7 @@ class handler(BaseHTTPRequestHandler):
             path = parsed_path.path
             
             # Query endpoint - semantic search with Claude
-            if path == "/api/query" or path == "/api/index" or path == "/":
+            if path == '/api/query' or path == '/api/index' or path == '/':
                 self.handle_semantic_query()
                 return
             
@@ -96,7 +104,7 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        self.send_header('Access-Control-Max-Age', '86400')  # Cache preflight for 24 hours
+        self.send_header('Access-Control-Max-Age', '86400')
         self.end_headers()
 
     def handle_health_check(self):
@@ -247,7 +255,6 @@ class handler(BaseHTTPRequestHandler):
                 return
             
             # Step 1: Generate embedding using Vercel AI Gateway
-            # Using OpenAI text-embedding-3-small with 384 dimensions (matches ChromaDB default)
             try:
                 # Configure OpenAI client to use Vercel AI Gateway
                 openai_client = OpenAI(
@@ -303,21 +310,21 @@ class handler(BaseHTTPRequestHandler):
             metadatas = results['metadatas'][0]
             
             for i, (doc, metadata) in enumerate(zip(documents, metadatas), 1):
-                context_parts.append(f'<context id="{i}">')
-                context_parts.append(f"Date: {metadata.get('date', 'Unknown')}")
-                context_parts.append(f"Channel: {metadata.get('channel', 'Unknown')}")
-                context_parts.append(f"Start Time: {metadata.get('start_time', 'Unknown')}")
-                context_parts.append(f"Message Count: {metadata.get('message_count', 'Unknown')}")
-                context_parts.append(f"File Count: {metadata.get('file_count', 'Unknown')}")
+                context_parts.append('<context id="' + str(i) + '">')
+                context_parts.append('Date: ' + str(metadata.get('date', 'Unknown')))
+                context_parts.append('Channel: ' + str(metadata.get('channel', 'Unknown')))
+                context_parts.append('Start Time: ' + str(metadata.get('start_time', 'Unknown')))
+                context_parts.append('Message Count: ' + str(metadata.get('message_count', 'Unknown')))
+                context_parts.append('File Count: ' + str(metadata.get('file_count', 'Unknown')))
                 context_parts.append("")
                 context_parts.append(doc)
                 context_parts.append("</context>")
                 context_parts.append("")
                 
                 sources.append({
-                    "date": metadata.get('date'),
-                    "channel": metadata.get('channel'),
-                    "message_count": metadata.get('message_count')
+                    "date": metadata.get('date') or 'Unknown',
+                    "channel": metadata.get('channel') or 'Unknown',
+                    "message_count": metadata.get('message_count') or 0
                 })
             
             context = "\n".join(context_parts)
@@ -329,11 +336,7 @@ class handler(BaseHTTPRequestHandler):
 Cite the specific date, channel, and agent name for every claim. If the information is not in the context, say "I don't have information about that in the archives."
 """
             
-            user_message = f"""Context from archives:
-
-{context}
-
-Question: {query}"""
+            user_message = 'Context from archives:\n\n' + context + '\n\nQuestion: ' + query
             
             message = anthropic_client.messages.create(
                 model="claude-sonnet-4-20250514",
