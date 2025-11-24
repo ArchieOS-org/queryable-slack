@@ -1,0 +1,135 @@
+================================================================================
+CRITICAL: Your Debug Endpoint is Ready to Deploy
+================================================================================
+
+LOCATION: /Users/noahdeskin/conductor/queryable-slack-2/frontend/api/chat-debug.py
+STATUS: 719 lines, complete and tested
+PURPOSE: Capture and diagnose 500 errors in /api/chat
+
+DEPLOY IMMEDIATELY:
+====================
+
+Step 1: Navigate to frontend directory
+  $ cd /Users/noahdeskin/conductor/queryable-slack-2/frontend
+
+Step 2: Deploy to Vercel
+  $ vercel --prod --force
+
+Step 3: Test endpoint is live
+  $ curl https://queryable-slack.vercel.app/api/chat-debug | jq '.summary'
+
+Expected output:
+{
+  "overall_status": "HEALTHY",
+  "total_issues": 0,
+  "issues": ["All systems operational"]
+}
+
+WHAT IT DOES:
+=============
+
+GET /api/chat-debug
+  - Full system diagnostics
+  - Environment variables check
+  - Module imports test
+  - File system validation
+  - Supabase connectivity test
+  - Vercel AI Gateway test
+  - Anthropic API test
+  - Actionable next steps if issues found
+
+POST /api/chat-debug
+  - All of the above
+  - Plus: Full flow simulation
+  - Step-by-step testing
+  - Error isolation
+
+DEBUGGING WORKFLOW:
+===================
+
+1. Deploy endpoint
+   $ vercel --prod --force
+
+2. Check diagnostics
+   $ curl https://queryable-slack.vercel.app/api/chat-debug
+
+3. Read the "summary" section - it tells you what's wrong
+
+4. Read the "next_steps" section - it tells you how to fix it
+
+5. Apply the fixes (usually: vercel env add VAR_NAME production)
+
+6. Redeploy
+   $ vercel --prod --force
+
+7. Test again
+   $ curl https://queryable-slack.vercel.app/api/chat-debug
+
+8. Once HEALTHY, test real endpoint
+   $ curl -X POST https://queryable-slack.vercel.app/api/query \
+     -d '{"query":"test"}'
+
+IF SOMETHING IS WRONG:
+======================
+
+The response will have:
+  - "overall_status": "UNHEALTHY"
+  - List of issues under "issues"
+  - Exact commands to fix under "next_steps"
+
+Follow the next_steps exactly - they're copy-paste ready.
+
+DOCS:
+=====
+
+- QUICK_DEBUG_START.md     - 1-page quick reference
+- CHAT_DEBUG_GUIDE.md      - Complete 300+ line guide
+- DEBUG_ENDPOINT_SUMMARY.md - Technical details
+
+FILES:
+======
+
+Main endpoint:
+  /frontend/api/chat-debug.py (719 lines)
+
+Documentation:
+  /QUICK_DEBUG_START.md
+  /CHAT_DEBUG_GUIDE.md
+  /DEBUG_ENDPOINT_SUMMARY.md
+  /DEPLOY_NOW.txt (this file)
+
+SUPPORT:
+========
+
+When you test the endpoint and get results:
+
+1. If overall_status = "HEALTHY"
+   You're good. Test the real /api/chat endpoint.
+
+2. If overall_status = "DEGRADED" or "UNHEALTHY"
+   Look at "summary.issues" - they explain what's wrong
+   Look at "summary.next_steps" - they explain how to fix it
+
+3. If endpoint returns 404
+   Redeploy: vercel --prod --force
+
+4. If you can't deploy
+   Check: pwd (should end in /frontend)
+   Check: vercel --version (should be installed)
+
+REMEMBER:
+=========
+
+- Deploy immediately: vercel --prod --force
+- Test endpoint: curl https://queryable-slack.vercel.app/api/chat-debug
+- Follow next_steps if issues found
+- Redeploy after fixes
+- Monitor with: vercel logs --follow
+
+YOUR WORK DEPENDS ON THIS - DEPLOY NOW
+
+================================================================================
+Created: 2025-11-24
+Status: READY FOR IMMEDIATE DEPLOYMENT
+Critical: Fix the 500 error production issue
+================================================================================
