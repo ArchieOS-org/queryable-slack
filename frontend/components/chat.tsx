@@ -1,46 +1,18 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { useRouter } from "next/navigation";
-import { ModelSelector } from "@/components/model-selector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { SendIcon, PlusIcon } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
-import { DEFAULT_MODEL } from "@/lib/constants";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import Link from "next/link";
 
-function ModelSelectorHandler({
-  modelId,
-  onModelIdChange,
-}: {
-  modelId: string;
-  onModelIdChange: (newModelId: string) => void;
-}) {
-  const router = useRouter();
-
-  const handleSelectChange = (newModelId: string) => {
-    onModelIdChange(newModelId);
-    const params = new URLSearchParams();
-    params.set("modelId", newModelId);
-    router.push(`?${params.toString()}`);
-  };
-
-  return <ModelSelector modelId={modelId} onModelChange={handleSelectChange} />;
-}
-
-export function Chat({ modelId = DEFAULT_MODEL }: { modelId: string }) {
+export function Chat() {
   const [input, setInput] = useState("");
-  const [currentModelId, setCurrentModelId] = useState(modelId);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  const handleModelIdChange = (newModelId: string) => {
-    setCurrentModelId(newModelId);
-  };
 
   const { messages, error, sendMessage, regenerate, setMessages, stop } = useChat();
 
@@ -85,29 +57,22 @@ export function Chat({ modelId = DEFAULT_MODEL }: { modelId: string }) {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  sendMessage({ text: input }, { body: { modelId: currentModelId } });
+                  sendMessage({ text: input });
                   setInput("");
                 }}
               >
                 <div className="flex items-center gap-2 md:gap-3 p-3 md:p-4 rounded-2xl glass-effect shadow-border-medium transition-all duration-200 ease-out">
-                  <ModelSelectorHandler
-                    modelId={modelId}
-                    onModelIdChange={handleModelIdChange}
-                  />
                   <div className="flex flex-1 items-center">
                     <Input
                       name="prompt"
-                      placeholder="Ask a question..."
+                      placeholder="Ask a question about your real estate archives..."
                       onChange={(e) => setInput(e.target.value)}
                       value={input}
                       autoFocus
                       className="flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-base placeholder:text-muted-foreground/60"
                       onKeyDown={(e) => {
                         if (e.metaKey && e.key === "Enter") {
-                          sendMessage(
-                            { text: input },
-                            { body: { modelId: currentModelId } },
-                          );
+                          sendMessage({ text: input });
                           setInput("");
                         }
                       }}
@@ -164,7 +129,7 @@ export function Chat({ modelId = DEFAULT_MODEL }: { modelId: string }) {
             <div className="flex flex-row gap-2">
               <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
               <AlertDescription className="dark:text-red-400 text-red-600">
-                {error.message.startsWith("AI Gateway requires a valid credit card") ? <div>AI Gateway requires a valid credit card on file to service requests. Please visit your <Link className="underline underline-offset-4" href="https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card" target="_noblank">dashboard</Link> to add a card and unlock your free credits.</div> : "An error occurred while generating the response."}
+                An error occurred while querying the archives.
               </AlertDescription>
             </div>
             <Button
@@ -184,16 +149,12 @@ export function Chat({ modelId = DEFAULT_MODEL }: { modelId: string }) {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              sendMessage({ text: input }, { body: { modelId: currentModelId } });
+              sendMessage({ text: input });
               setInput("");
             }}
             className="px-4 md:px-8 pb-6 md:pb-8"
           >
             <div className="flex items-center gap-3 p-4 rounded-2xl glass-effect shadow-border-medium transition-all duration-200 ease-out">
-              <ModelSelectorHandler
-                modelId={modelId}
-                onModelIdChange={handleModelIdChange}
-              />
               <div className="flex flex-1 items-center">
                 <Input
                   name="prompt"
@@ -203,10 +164,7 @@ export function Chat({ modelId = DEFAULT_MODEL }: { modelId: string }) {
                   className="flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-base placeholder:text-muted-foreground/60 font-medium"
                   onKeyDown={(e) => {
                     if (e.metaKey && e.key === "Enter") {
-                      sendMessage(
-                        { text: input },
-                        { body: { modelId: currentModelId } },
-                      );
+                      sendMessage({ text: input });
                       setInput("");
                     }
                   }}
@@ -228,24 +186,7 @@ export function Chat({ modelId = DEFAULT_MODEL }: { modelId: string }) {
 
       <footer className="pb-8 text-center animate-fade-in" style={{ animationDelay: '200ms' }}>
         <p className="text-xs md:text-sm text-muted-foreground">
-          The models in the list are a small subset of those available in the
-          Vercel AI Gateway.
-          <br />
-          See the{" "}
-          <Button
-            variant="link"
-            asChild
-            className="p-0 h-auto text-xs md:text-sm font-normal"
-          >
-            <a
-              href="https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%2Fmodel-list&title="
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              model library
-            </a>
-          </Button>{" "}
-          for the full set.
+          Powered by Conductor - Your Real Estate Archives Assistant
         </p>
       </footer>
     </div>
