@@ -235,7 +235,7 @@ class handler(BaseHTTPRequestHandler):
                 return
             
             # Import at runtime to avoid cold start issues
-            from conductor.supabase_query import query_vector_similarity
+            from conductor.deep_research_query import deep_research_query
             from anthropic import Anthropic
             from openai import OpenAI
             
@@ -279,16 +279,18 @@ class handler(BaseHTTPRequestHandler):
                 })
                 return
             
-            # Step 2: Query Supabase vector search using the imported function
+            # Step 2: Query using deep research (multi-query + RRF fusion)
             try:
-                results = query_vector_similarity(
+                results = deep_research_query(
+                    query_text=query,
                     query_embedding=query_embedding,
-                    match_threshold=0.0,
-                    match_count=match_count
+                    deep_research_n_results=50,  # Retrieve 50 results per query variation
+                    max_final_results=40,  # Return top 40 after fusion
+                    num_query_variations=7  # Generate 7 query variations
                 )
             except Exception as search_error:
                 self.send_json_response(500, {
-                    "error": "Vector search failed",
+                    "error": "Deep research failed",
                     "details": str(search_error)
                 })
                 return
@@ -329,12 +331,13 @@ class handler(BaseHTTPRequestHandler):
             
             context = "\n".join(context_parts)
             
-            # Step 5: Query Claude
+            # Step 5: Query Claude with multimodal-aware system prompt
             anthropic_client = Anthropic(api_key=anthropic_key)
-            
-            system_prompt = """You are a Real Estate Archives Assistant. Answer based ONLY on the provided context.
-Cite the specific date, channel, and agent name for every claim. If the information is not in the context, say "I don't have information about that in the archives."
-"""
+
+            # Import the multimodal-aware system prompt
+            from conductor.prompt_refiner import SYSTEM_PROMPT_SEARCH_AGENT
+
+            system_prompt = SYSTEM_PROMPT_SEARCH_AGENT
             
             user_message = 'Context from archives:\n\n' + context + '\n\nQuestion: ' + query
             
