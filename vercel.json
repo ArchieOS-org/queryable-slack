@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd frontend && pnpm install && pnpm build",
+  "installCommand": "cd frontend && pnpm install",
+  "outputDirectory": "frontend/.next",
+  "framework": null,
+  "functions": {
+    "api/**/*.py": {
+      "memory": 1024,
+      "maxDuration": 15
+    }
+  }
+}

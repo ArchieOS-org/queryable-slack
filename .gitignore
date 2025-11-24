@@ -43,3 +43,10 @@ dist/
 build/
 *.egg-info/
 
+
+# Vercel
+.vercel
+.vercel/
+*.log
+.env.local
+.env.production

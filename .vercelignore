@@ -1,0 +1,69 @@
+# Vercel Ignore - Exclude these from deployment
+
+# Development
+.conductor/
+conductor_db/
+.venv/
+venv/
+venv311/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Testing
+tests/
+__tests__/
+.pytest_cache/
+.coverage
+htmlcov/
+*.test.py
+test_*.py
+fixtures/
+testdata/
+
+# Documentation
+*.md
+!README.md
+!VERCEL_DEPLOYMENT.md
+docs/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Trial exports and samples
+trial_export/
+manado/
+sample-data/
+static/
+
+# Large files
+*.db
+*.sqlite3
+*.log
+*.mp4
+*.avi
+*.mov
