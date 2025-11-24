@@ -52,3 +52,6 @@ ls -lht ~/.conductor_logs/
 - ✅ Simple text progress when redirected to file
 - ✅ Checkpoint system tracks progress and retries failed files
 
+
+
+

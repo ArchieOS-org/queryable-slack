@@ -64,3 +64,6 @@ echo ""
 # Tail the log file
 tail -f "$LOG_FILE" 2>/dev/null
 
+
+
+

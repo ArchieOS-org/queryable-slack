@@ -75,3 +75,6 @@ tail -f "$LATEST_LOG" 2>/dev/null | while IFS= read -r line; do
     fi
 done
 
+
+
+

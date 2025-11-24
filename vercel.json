@@ -10,13 +10,18 @@
     },
     {
       "src": "api/index.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxLambdaSize": "50mb"
-      }
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api/migrate.py",
+      "use": "@vercel/python"
     }
   ],
   "routes": [
+    {
+      "src": "/api/migrate",
+      "dest": "/api/migrate.py"
+    },
     {
       "src": "/api/(.*)",
       "dest": "/api/index.py"

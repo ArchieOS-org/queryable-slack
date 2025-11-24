@@ -11,6 +11,7 @@ import os
 os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
 
 import sys
+import logging
 from pathlib import Path
 from typing import Optional, Dict
 from fastapi import FastAPI, HTTPException, Request
@@ -19,16 +20,33 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Import chatbot functionality
-from conductor.ask import (
-    query_chromadb,
-    format_context,
-    DEFAULT_DB_PATH
-)
-from conductor.prompt_refiner import (
-    query_claude_with_system_prompt,
-    SYSTEM_PROMPT_SEARCH_AGENT
-)
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# Don't import conductor modules at module level - import lazily in endpoints
+# This allows the app to start even if conductor modules aren't available
+CONDUCTOR_AVAILABLE = False
+
+def _import_conductor():
+    """Lazy import of conductor modules."""
+    global CONDUCTOR_AVAILABLE, query_chromadb, format_context, DEFAULT_DB_PATH
+    global query_claude_with_system_prompt, SYSTEM_PROMPT_SEARCH_AGENT
+    try:
+        from conductor.ask import (
+            query_chromadb,
+            format_context,
+            DEFAULT_DB_PATH
+        )
+        from conductor.prompt_refiner import (
+            query_claude_with_system_prompt,
+            SYSTEM_PROMPT_SEARCH_AGENT
+        )
+        CONDUCTOR_AVAILABLE = True
+        return True
+    except ImportError as e:
+        logger.warning(f"Could not import conductor modules: {e}. Some endpoints may not work.")
+        CONDUCTOR_AVAILABLE = False
+        return False
 
 load_dotenv()
 
@@ -54,6 +72,20 @@ app.add_middleware(
 )
 
 
+# Global exception handler for better error logging (Context7 best practice)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler to log all errors."""
+    logger.error(f"Unhandled exception: {type(exc).__name__}: {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"Internal server error: {type(exc).__name__}: {str(exc)}",
+            "type": type(exc).__name__
+        }
+    )
+
+
 class QueryRequest(BaseModel):
     """Request model for chat queries."""
     query: str
@@ -74,6 +106,20 @@ class QueryResponse(BaseModel):
     retrieval_stats: Optional[Dict] = None  # Stats about retrieval process
 
 
+class MigrateRequest(BaseModel):
+    """Request model for migration batches."""
+    sql: str
+    batch_name: Optional[str] = None
+
+
+class MigrateResponse(BaseModel):
+    """Response model for migration."""
+    success: bool
+    batch: Optional[str] = None
+    rows_affected: Optional[int] = None
+    error: Optional[str] = None
+
+
 @app.get("/")
 async def root():
     """Root endpoint."""
@@ -82,7 +128,8 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "/query": "POST - Query the vector database",
-            "/health": "GET - Health check"
+            "/health": "GET - Health check",
+            "/migrate": "POST - Execute SQL migration batch (via /api/migrate)"
         }
     }
 
@@ -184,6 +231,65 @@ async def query_endpoint(request: QueryRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/migrate", response_model=MigrateResponse)
+async def migrate_endpoint(request: MigrateRequest):
+    """
+    Execute SQL migration batch using psycopg pipeline mode for optimal performance.
+    
+    This endpoint executes SQL batches for migrating data to Supabase.
+    Uses Context7 best practices: pipeline mode for batch execution.
+    """
+    try:
+        # Import psycopg with better error handling
+        try:
+            import psycopg
+        except ImportError as e:
+            error_msg = f"Failed to import psycopg: {e}. Ensure psycopg[binary]>=3.1.0 is in requirements.txt"
+            logger.error(error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+        db_url = os.environ.get('DATABASE_URL')
+        if not db_url:
+            error_msg = "DATABASE_URL environment variable not configured"
+            logger.error(error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+        batch_name = request.batch_name or "unknown"
+        logger.info(f"Executing migration batch: {batch_name} ({len(request.sql)} chars)")
+        
+        # Use pipeline mode for optimal batch execution (Context7 best practice)
+        try:
+            with psycopg.connect(db_url) as conn:
+                # Use pipeline mode for better performance
+                with conn.pipeline():
+                    # Execute the SQL statement
+                    with conn.cursor() as cur:
+                        cur.execute(request.sql)
+                    # Pipeline automatically commits on success
+                    
+            # Get row count estimate (approximate)
+            rows_affected = request.sql.count("VALUES") if "VALUES" in request.sql else 0
+            
+            logger.info(f"✅ Successfully executed {batch_name} (estimated {rows_affected} rows)")
+            
+            return MigrateResponse(
+                success=True,
+                batch=batch_name,
+                rows_affected=rows_affected
+            )
+        except psycopg.Error as e:
+            error_msg = f"PostgreSQL error: {type(e).__name__}: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        error_msg = f"Unexpected error: {type(e).__name__}: {str(e)}"
+        logger.error(f"❌ Migration error: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 if __name__ == "__main__":

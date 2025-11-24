@@ -47,3 +47,6 @@ bash /Volumes/LaCie/Coding-Projects/queryable-slack/monitor_ingestion.sh
 
 Or run the commands directly without a script file.
 
+
+
+

@@ -42,3 +42,6 @@ ls -lht ~/.conductor_logs/
 
 **Note**: Logs are stored in `~/.conductor_logs/` (your home directory) to avoid macOS external drive permission issues.
 
+
+
+

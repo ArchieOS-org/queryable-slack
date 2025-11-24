@@ -24,3 +24,6 @@ echo ""
 sleep 3
 tail -20 "$LOG_FILE" 2>/dev/null || echo "Waiting for process to start..."
 
+
+
+

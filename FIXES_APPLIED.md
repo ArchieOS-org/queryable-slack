@@ -71,3 +71,6 @@ def _get_pandas():
 - **Log File Size**: Reduced by ~40% (fewer warnings)
 - **Startup Visibility**: Immediate progress output
 
+
+
+
