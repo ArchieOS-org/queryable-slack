@@ -5,9 +5,8 @@ export async function POST(req: Request) {
     // Get the request body
     const body = await req.json();
 
-    // Forward to the Python API handler
-    // The Python handler is at /api/index.py in the Vercel deployment
-    const pythonApiUrl = new URL('/api/index.py', req.url);
+    // Forward to the Python API handler (WITHOUT .py extension!)
+    const pythonApiUrl = new URL('/api/index', req.url);
 
     const response = await fetch(pythonApiUrl.toString(), {
       method: 'POST',

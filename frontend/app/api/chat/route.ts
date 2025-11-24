@@ -1,12 +1,24 @@
 import { NextResponse } from 'next/server';
-import type { ConductorQueryResponse } from '@/lib/conductor-types';
-
-export const maxDuration = 60;
 
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
 }
+
+interface ConductorSource {
+  date: string;
+  channel: string;
+  message_count: number;
+}
+
+interface ConductorQueryResponse {
+  answer: string;
+  sources: ConductorSource[];
+  query: string;
+  retrieval_count: number;
+}
+
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
   const requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).substring(7);
@@ -50,16 +62,21 @@ export async function POST(req: Request) {
     }
 
     const data: ConductorQueryResponse = await response.json();
-    console.log('[' + requestId + '] Got response with ' + (data.sources?.length || 0) + ' sources');
+    console.log('[' + requestId + '] Got response with ' + ((data.sources && Array.isArray(data.sources)) ? data.sources.length : 0) + ' sources');
 
-    let formattedContent = data.answer;
+    let formattedContent = data.answer || 'No answer provided.';
 
-    if (data.sources && data.sources.length > 0) {
+    // FIX 1: Proper null check for sources
+    if (data.sources && Array.isArray(data.sources) && data.sources.length > 0) {
       formattedContent += '\n\n---\n\n**Sources:**\n\n';
       data.sources.forEach((source, index) => {
         const sourceNum = index + 1;
-        formattedContent += sourceNum + '. **' + source.channel + '** (' + source.date + ')\n';
-        formattedContent += '   - ' + source.message_count + ' messages\n\n';
+        // Additional safety for source properties
+        const channel = source?.channel || 'Unknown';
+        const date = source?.date || 'Unknown';
+        const messageCount = source?.message_count || 0;
+        formattedContent += sourceNum + '. **' + channel + '** (' + date + ')\n';
+        formattedContent += '   - ' + messageCount + ' messages\n\n';
       });
     }
 
@@ -69,25 +86,31 @@ export async function POST(req: Request) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          const messageStart = '0:{"type":"message_start","id":"' + requestId + '","role":"assistant"}\n';
+          // FIX 2: Correct SSE format with "data: " prefix and double newlines
+          const messageStart = 'data: {"type":"message_start","id":"' + requestId + '","role":"assistant"}\n\n';
           controller.enqueue(encoder.encode(messageStart));
 
           const chunkSize = 50;
           for (let i = 0; i < formattedContent.length; i += chunkSize) {
             const chunk = formattedContent.substring(i, i + chunkSize);
             const escapedChunk = chunk.replace(/\n/g, '\\n').replace(/"/g, '\\"');
-            const deltaEvent = '0:{"type":"text-delta","textDelta":"' + escapedChunk + '"}\n';
+            // FIX 2: Correct SSE format
+            const deltaEvent = 'data: {"type":"text-delta","textDelta":"' + escapedChunk + '"}\n\n';
             controller.enqueue(encoder.encode(deltaEvent));
             await new Promise(resolve => setTimeout(resolve, 10));
           }
 
-          controller.enqueue(encoder.encode('0:{"type":"message_complete","finishReason":"stop"}\n'));
+          // FIX 2: Correct SSE format
+          controller.enqueue(encoder.encode('data: {"type":"message_complete","finishReason":"stop"}\n\n'));
 
           console.log('[' + requestId + '] Stream completed successfully');
           controller.close();
         } catch (error) {
           console.error('[' + requestId + '] Error in stream:', error);
-          controller.error(error);
+          // FIX 3: Send error as SSE event instead of crashing
+          const errorEvent = 'data: {"type":"error","error":"' + (error instanceof Error ? error.message : 'Unknown error') + '"}\n\n';
+          controller.enqueue(encoder.encode(errorEvent));
+          controller.close();
         }
       }
     });
@@ -107,4 +130,15 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+}
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    },
+  });
 }
