@@ -280,13 +280,14 @@ class handler(BaseHTTPRequestHandler):
                 return
             
             # Step 2: Query using deep research (multi-query + RRF fusion)
+            # Optimized for Vercel 60s timeout: fewer variations, still effective
             try:
                 results = deep_research_query(
                     query_text=query,
                     query_embedding=query_embedding,
-                    deep_research_n_results=50,  # Retrieve 50 results per query variation
-                    max_final_results=40,  # Return top 40 after fusion
-                    num_query_variations=7  # Generate 7 query variations
+                    deep_research_n_results=30,  # Retrieve 30 results per query variation
+                    max_final_results=25,  # Return top 25 after fusion
+                    num_query_variations=3  # Generate 3 query variations (faster for Vercel)
                 )
             except Exception as search_error:
                 self.send_json_response(500, {
