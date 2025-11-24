@@ -62,13 +62,14 @@ def _convert_to_pooler_url(db_url: str) -> str:
     
     # For Vercel serverless: Use transaction pooler (port 6543) with workaround parameter
     # Context7 best practice: Transaction mode for serverless + Vercel workaround
-    # Format: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres?workaround=supabase-pooler.vercel
+    # Format: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-1-[REGION].pooler.supabase.com:6543/postgres
     
     # Update username to include project ref: postgres.[PROJECT-REF]
     pooler_username = f'{username}.{project_ref}' if '.' not in username else username
     
     # Use first region (will try others if connection fails)
-    pooler_hostname = f'aws-0-{regions_to_try[0]}.pooler.supabase.com'
+    # Context7: Supabase uses aws-1-{region} format (not aws-0)
+    pooler_hostname = f'aws-1-{regions_to_try[0]}.pooler.supabase.com'
     pooler_port = 6543  # Transaction pooler (recommended for serverless/Vercel)
     
     # Rebuild URL with pooler hostname and port
@@ -238,7 +239,7 @@ class handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({
                     'success': False,
                     'error': error_msg,
-                    'hint': 'Check DATABASE_URL format. For pooler, use: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres'
+                    'hint': 'Check DATABASE_URL format. For pooler, use: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-1-[REGION].pooler.supabase.com:6543/postgres'
                 }).encode())
                 return
             

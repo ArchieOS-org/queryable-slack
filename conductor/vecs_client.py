@@ -21,6 +21,60 @@ EMBEDDING_DIMENSION = 384
 COLLECTION_NAME = "conductor_sessions"
 
 
+def _convert_to_pooler_url(db_url: str) -> str:
+    """
+    Convert direct Supabase connection URL to connection pooler URL.
+    Context7 best practice: Use transaction pooler (port 6543) for serverless/Vercel.
+    
+    Returns pooler URL in format:
+    postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-1-[REGION].pooler.supabase.com:6543/postgres
+    """
+    import re
+    from urllib.parse import urlparse, urlunparse
+    
+    # Parse the connection URL
+    parsed = urlparse(db_url)
+    
+    # Check if already using pooler - return as-is
+    if 'pooler.supabase.com' in (parsed.hostname or ''):
+        logger.info("Already using pooler connection")
+        return db_url
+    
+    # Extract project ref from hostname (e.g., db.gxpcrohsbtndndypagie.supabase.co)
+    match = re.search(r'db\.([^.]+)\.supabase\.co', parsed.hostname or '')
+    if not match:
+        logger.warning(f"Could not parse Supabase URL for pooler conversion: {parsed.hostname}")
+        return db_url  # Return original if we can't parse it
+    
+    project_ref = match.group(1)
+    password = parsed.password or ''
+    
+    # Try common regions - start with us-east-1 (aws-1 format)
+    # Context7: Use aws-1-{region} format for Supabase pooler
+    regions_to_try = ['us-east-1', 'us-west-1', 'eu-west-1', 'ap-southeast-1', 'eu-central-1']
+    region = os.environ.get('SUPABASE_REGION', 'us-east-1')
+    
+    if region not in regions_to_try:
+        regions_to_try.insert(0, region)
+    
+    # Use first region (will try others if connection fails)
+    pooler_hostname = f'aws-1-{regions_to_try[0]}.pooler.supabase.com'
+    pooler_username = f'postgres.{project_ref}'
+    
+    # Construct pooler URL with transaction mode (port 6543)
+    pooler_url = urlunparse((
+        'postgresql',
+        f'{pooler_username}:{password}@{pooler_hostname}:6543',
+        '/postgres',
+        '',
+        '',
+        ''
+    ))
+    
+    logger.info(f"Converted to pooler URL: postgresql://{pooler_username}:***@{pooler_hostname}:6543/postgres")
+    return pooler_url
+
+
 def _get_vecs_client():
     """Get or create vecs client (singleton)."""
     global _vecs_client
@@ -40,6 +94,11 @@ def _get_vecs_client():
                 "DATABASE_URL environment variable is required for Supabase vecs. "
                 "Set it to your Supabase Postgres connection string."
             )
+        
+        # Convert to pooler URL for serverless/Vercel (Context7 best practice)
+        # Use pooler for better connection management in serverless environments
+        if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
+            db_connection = _convert_to_pooler_url(db_connection)
         
         logger.info("Connecting to Supabase Postgres via vecs...")
         _vecs_client = vecs.create_client(db_connection)
@@ -127,14 +186,12 @@ def query_vecs(
             if not db_url:
                 raise ValueError("DATABASE_URL not set")
             
-            parsed = urlparse(db_url)
-            conn = psycopg.connect(
-                host=parsed.hostname,
-                port=parsed.port or 5432,
-                user=parsed.username,
-                password=parsed.password,
-                dbname=parsed.path.lstrip('/')
-            )
+            # Convert to pooler URL for serverless/Vercel (Context7 best practice)
+            if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):
+                db_url = _convert_to_pooler_url(db_url)
+            
+            # Use connection string directly (psycopg supports connection strings)
+            conn = psycopg.connect(db_url)
             
             # Query vecs table directly
             # Vecs stores collections in a table named after the collection in the vecs schema

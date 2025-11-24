@@ -9,23 +9,95 @@ Provides command-line interface for semantic search.
 import os
 os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
 
+# #region agent log
+import json
+import time
+_debug_log_path = os.environ.get('DEBUG_LOG_PATH') or ('/tmp/debug.log' if os.environ.get('VERCEL') else '/Volumes/LaCie/Coding-Projects/queryable-slack/.cursor/debug.log')
+try:
+    with open(_debug_log_path, 'a') as f:
+        f.write(json.dumps({"location":"conductor/ask.py:14","message":"ask.py module loading started","data":{"file":"ask.py","debug_path":_debug_log_path},"timestamp":time.time(),"sessionId":"debug-session","runId":"vercel-debug","hypothesisId":"A"})+"\n")
+except: pass
+# #endregion
+
+# #region agent log
+try:
+    with open(_debug_log_path, 'a') as f:
+        f.write(json.dumps({"location":"conductor/ask.py:25","message":"About to import config","data":{},"timestamp":time.time(),"sessionId":"debug-session","runId":"vercel-debug","hypothesisId":"D"})+"\n")
+except: pass
+# #endregion
+
 from pathlib import Path
 from typing import Dict, Optional
 
-import chromadb
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
 import logging
+
+# Import config first to determine if we need chromadb
+try:
+    # #region agent log
+    try:
+        with open(_debug_log_path, 'a') as f:
+            f.write(json.dumps({"location":"conductor/ask.py:37","message":"Attempting config import","data":{},"timestamp":time.time(),"sessionId":"debug-session","runId":"vercel-debug","hypothesisId":"D"})+"\n")
+    except: pass
+    # #endregion
+    from conductor.config import DEFAULT_DB_PATH, CHROMADB_URL, USE_VECS
+    # #region agent log
+    try:
+        with open(_debug_log_path, 'a') as f:
+            f.write(json.dumps({"location":"conductor/ask.py:40","message":"Config imported successfully","data":{"USE_VECS":USE_VECS,"DEFAULT_DB_PATH":str(DEFAULT_DB_PATH) if DEFAULT_DB_PATH else None},"timestamp":time.time(),"sessionId":"debug-session","runId":"vercel-debug","hypothesisId":"D"})+"\n")
+    except: pass
+    # #endregion
+except Exception as e:
+    # #region agent log
+    try:
+        with open(_debug_log_path, 'a') as f:
+            f.write(json.dumps({"location":"conductor/ask.py:43","message":"Config import failed","data":{"error":str(e),"error_type":type(e).__name__},"timestamp":time.time(),"sessionId":"debug-session","runId":"vercel-debug","hypothesisId":"D"})+"\n")
+    except: pass
+    # #endregion
+    raise
 
 # Import reranking, monitoring, caching, and hybrid search
 from conductor.reranker import rerank_results
 from conductor.monitoring import track_query, get_metrics_summary
 from conductor.cache import cached_query, get_cache_stats
 from conductor.hybrid_search import hybrid_search
-from conductor.config import DEFAULT_DB_PATH, CHROMADB_URL, USE_VECS
 from conductor.multi_query import generate_query_variations
 from conductor.rank_fusion import fuse_chromadb_results
+
+# Conditionally import chromadb only if not using vecs
+chromadb = None
+# #region agent log
+try:
+    with open(_debug_log_path, 'a') as f:
+        f.write(json.dumps({"location":"conductor/ask.py:45","message":"Before chromadb conditional import","data":{"USE_VECS":USE_VECS,"will_import_chromadb":not USE_VECS},"timestamp":time.time(),"sessionId":"debug-session","runId":"vercel-debug","hypothesisId":"E"})+"\n")
+except: pass
+# #endregion
+if not USE_VECS:
+    try:
+        # #region agent log
+        try:
+            with open(_debug_log_path, 'a') as f:
+                f.write(json.dumps({"location":"conductor/ask.py:50","message":"Attempting chromadb import","data":{},"timestamp":time.time(),"sessionId":"debug-session","runId":"vercel-debug","hypothesisId":"E"})+"\n")
+        except: pass
+        # #endregion
+        import chromadb
+        # #region agent log
+        try:
+            with open(_debug_log_path, 'a') as f:
+                f.write(json.dumps({"location":"conductor/ask.py:54","message":"chromadb imported successfully","data":{},"timestamp":time.time(),"sessionId":"debug-session","runId":"vercel-debug","hypothesisId":"E"})+"\n")
+        except: pass
+        # #endregion
+    except ImportError as e:
+        # #region agent log
+        try:
+            with open(_debug_log_path, 'a') as f:
+                f.write(json.dumps({"location":"conductor/ask.py:58","message":"chromadb import failed","data":{"error":str(e)},"timestamp":time.time(),"sessionId":"debug-session","runId":"vercel-debug","hypothesisId":"E"})+"\n")
+        except: pass
+        # #endregion
+        # chromadb not available, but that's OK if we're using vecs
+        pass
 
 # Import vecs client if using Supabase
 if USE_VECS:
@@ -86,6 +158,9 @@ def _query_chromadb_impl(
         # Initialize ChromaDB client
         # Use HTTP client if CHROMADB_URL is set (for Vercel/serverless)
         # Otherwise use PersistentClient (for local development)
+        if chromadb is None:
+            raise ImportError("chromadb is required when USE_VECS is False. Install with: pip install chromadb")
+        
         if CHROMADB_URL:
             # Parse URL to extract host and port
             from urllib.parse import urlparse

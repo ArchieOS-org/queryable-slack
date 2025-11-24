@@ -8,7 +8,21 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, List, Any
 
-import chromadb
+# Lazy import chromadb - only needed if not using vecs
+_chromadb = None
+def _get_chromadb():
+    """Lazy import chromadb to avoid import errors when using vecs."""
+    global _chromadb
+    if _chromadb is None:
+        try:
+            import chromadb
+            _chromadb = chromadb
+        except ImportError as e:
+            raise ImportError(
+                "chromadb is not installed. Install with: pip install chromadb. "
+                "Or set DATABASE_URL to use Supabase vecs instead."
+            ) from e
+    return _chromadb
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +57,7 @@ def hybrid_search(
     """
     try:
         # Initialize ChromaDB client
+        chromadb = _get_chromadb()  # Lazy import
         client = chromadb.PersistentClient(path=str(db_path))
         collection = client.get_collection(name="conductor_sessions")
         
