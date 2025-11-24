@@ -22,8 +22,9 @@ export async function POST(req: Request) {
 
     const query = lastMessage.content;
 
-    const conductorUrl = process.env.NEXT_PUBLIC_CONDUCTOR_API_URL || 'https://queryable-slack-uprf9bjfg-nsd97s-projects.vercel.app';
-    const response = await fetch(`${conductorUrl}/api/query`, {
+    // Use relative URL to call API on same domain
+    const apiUrl = new URL('/api/query', req.url);
+    const response = await fetch(apiUrl.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
