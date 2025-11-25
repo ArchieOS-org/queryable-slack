@@ -74,16 +74,29 @@ def extract_entities(query: str) -> List[str]:
     Extract potential entity names from query.
 
     Looks for capitalized words that likely represent:
-    - Person names (EJ, Kayla, Lisa)
+    - Person names (EJ, Kayla, Lisa, Mary Smith)
+    - Short names/initials (EJ, DJ, TJ, AJ)
+    - Possessive forms (EJ's, EJs)
     - Property addresses (156 Seymour)
     - Company names
     """
     entities = []
 
-    # Pattern for capitalized words/phrases (names, places)
-    # Matches: "EJ", "Kayla Smith", "156 Seymour"
-    name_pattern = r'\b[A-Z][a-z]*(?:\s+[A-Z][a-z]*)*\b'
-    matches = re.findall(name_pattern, query)
+    # Pattern for flexible name matching (handles initials and possessives)
+    # Matches:
+    # - Short uppercase names: "EJ", "DJ", "TJ", "AJ"
+    # - Possessives: "EJ's", "EJs"
+    # - Multi-word names: "Mary Smith", "EJ Smith"
+    # - Standard names: "Kayla", "Lisa"
+    name_pattern = re.compile(
+        r"\b(?:"
+        r"[A-Z]{1,3}(?:['']?s)?(?:\s+[A-Z][a-z]*)?"  # Initials (EJ, DJ) + optional possessive + optional surname
+        r"|"
+        r"[A-Z][a-z]+(?:\s+[A-Z](?:[a-z]+)?)*"  # Standard names (Mary, Mary Smith, Mary J)
+        r")\b",
+        re.UNICODE
+    )
+    matches = name_pattern.findall(query)
 
     # Filter out common words that happen to be capitalized
     common_words = {
@@ -92,12 +105,18 @@ def extract_entities(query: str) -> List[str]:
         'Can', 'Could', 'Would', 'Should', 'May', 'Might',
         'Show', 'Tell', 'Find', 'Get', 'List', 'Give',
         'All', 'Any', 'Some', 'Most', 'Many', 'Few',
+        'And', 'Or', 'But', 'Not', 'For', 'With', 'About',
     }
 
     for match in matches:
+        # Clean possessive suffix for comparison but keep original
+        clean_match = re.sub(r"['']?s$", "", match)
         # Skip common words
-        if match not in common_words:
-            entities.append(match)
+        if clean_match not in common_words:
+            # Normalize: strip possessive suffix for entity name
+            normalized = clean_match.strip()
+            if normalized:
+                entities.append(normalized)
 
     # Also look for address-like patterns
     address_pattern = r'\b\d{1,5}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b'
