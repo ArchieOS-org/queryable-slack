@@ -284,11 +284,14 @@ class handler(BaseHTTPRequestHandler):
             # Look for addresses, specific identifiers, or quoted terms
             search_text = None
 
-            # Check for address patterns (numbers followed by words)
-            address_pattern = r'\b\d+\s+[A-Za-z]+(?:\s+[A-Za-z]+)*(?:\s+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Crt|Court|Cr|Crescent|Way|Circle|Pl|Place))?\b'
+            # Check for address patterns (numbers followed by street name)
+            # Extract just number + street name (e.g., "5604 Soren") without suffix
+            # This handles variations like "Lane" vs "Ln", "Street" vs "St", etc.
+            address_pattern = r'\b(\d+\s+[A-Za-z]+)(?:\s+[A-Za-z]+)*(?:\s+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Crt|Court|Cr|Crescent|Way|Circle|Pl|Place))?\b'
             address_match = re.search(address_pattern, query, re.IGNORECASE)
             if address_match:
-                search_text = address_match.group(0)
+                # Use just the number and street name for more flexible matching
+                search_text = address_match.group(1)
 
             # Also check for quoted terms
             if not search_text:
