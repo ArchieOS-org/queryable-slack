@@ -186,16 +186,16 @@ def classify_query(query: str) -> QueryClassification:
     # Determine if extended thinking is needed
     requires_extended_thinking = query_type in ("analytical", "comparative", "behavioral")
 
-    # Budget tokens based on complexity
+    # Budget tokens based on complexity (balanced for Vercel 60s timeout)
     if query_type == "analytical" and len(entities) > 0:
         # Person/entity analysis needs more thinking
-        budget_tokens = 10000
+        budget_tokens = 6000  # Reduced from 10000 for faster response
     elif query_type == "comparative":
         # Comparisons need moderate thinking
-        budget_tokens = 8000
+        budget_tokens = 5000  # Reduced from 8000
     elif requires_extended_thinking:
         # Other complex queries
-        budget_tokens = 6000
+        budget_tokens = 4000  # Reduced from 6000
     else:
         budget_tokens = 0
 

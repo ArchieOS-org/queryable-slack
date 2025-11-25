@@ -51,11 +51,11 @@ def deep_research_query(
         entities = classification.entities_mentioned
         dimensions = classification.analysis_dimensions
 
-        # Boost retrieval for analytical queries
+        # Boost retrieval for analytical queries (balanced for Vercel 60s timeout)
         if is_analytical:
-            deep_research_n_results = max(deep_research_n_results, 75)  # At least 75 per variation
-            max_final_results = max(max_final_results, 60)  # At least 60 final results
-            num_query_variations = max(num_query_variations, 10)  # At least 10 variations
+            deep_research_n_results = max(deep_research_n_results, 60)  # 60 per variation (was 75)
+            max_final_results = max(max_final_results, 50)  # 50 final results (was 60)
+            num_query_variations = max(num_query_variations, 8)  # 8 variations (was 10)
             logger.info(f"Analytical query detected - boosted params: "
                         f"n_results={deep_research_n_results}, "
                         f"final={max_final_results}, "
