@@ -184,7 +184,9 @@ def classify_query(query: str) -> QueryClassification:
         query_type = "factual"
 
     # Determine if extended thinking is needed
-    requires_extended_thinking = query_type in ("analytical", "comparative", "behavioral")
+    # NOTE: Disabled for now due to Vercel 60s timeout - analytical prompt alone provides good results
+    # Re-enable when using longer timeout or streaming
+    requires_extended_thinking = False  # Was: query_type in ("analytical", "comparative", "behavioral")
 
     # Budget tokens based on complexity (balanced for Vercel 60s timeout)
     if query_type == "analytical" and len(entities) > 0:
