@@ -236,6 +236,7 @@ class handler(BaseHTTPRequestHandler):
             
             # Import at runtime to avoid cold start issues
             from conductor.supabase_query import query_vector_similarity, query_hybrid_search
+            from conductor.deep_research_query import deep_research_query
             from anthropic import Anthropic
             from openai import OpenAI
             import re
@@ -280,43 +281,15 @@ class handler(BaseHTTPRequestHandler):
                 })
                 return
             
-            # Step 2: Extract potential search keywords from query
-            # Look for addresses, specific identifiers, or quoted terms
-            search_text = None
-
-            # Check for address patterns (numbers followed by street name)
-            # Extract just number + street name (e.g., "5604 Soren") without suffix
-            # This handles variations like "Lane" vs "Ln", "Street" vs "St", etc.
-            address_pattern = r'\b(\d+\s+[A-Za-z]+)(?:\s+[A-Za-z]+)*(?:\s+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Crt|Court|Cr|Crescent|Way|Circle|Pl|Place))?\b'
-            address_match = re.search(address_pattern, query, re.IGNORECASE)
-            if address_match:
-                # Use just the number and street name for more flexible matching
-                search_text = address_match.group(1)
-
-            # Also check for quoted terms
-            if not search_text:
-                quoted_match = re.search(r'"([^"]+)"', query)
-                if quoted_match:
-                    search_text = quoted_match.group(1)
-
-            # Step 3: Query Supabase using hybrid search for better coverage
+            # Step 2: Use exhaustive deep research with multi-query + RRF fusion
             try:
-                if search_text:
-                    # Use hybrid search when we have a specific search term
-                    results = query_hybrid_search(
-                        query_embedding=query_embedding,
-                        search_text=search_text,
-                        match_threshold=0.0,
-                        match_count=20,
-                        keyword_boost=0.3
-                    )
-                else:
-                    # Fall back to pure vector similarity
-                    results = query_vector_similarity(
-                        query_embedding=query_embedding,
-                        match_threshold=0.0,
-                        match_count=20
-                    )
+                results = deep_research_query(
+                    query_text=query,
+                    query_embedding=query_embedding,
+                    deep_research_n_results=50,   # 50 per query variation
+                    max_final_results=40,          # 40 after RRF fusion
+                    num_query_variations=7         # 7 diverse queries
+                )
             except Exception as search_error:
                 self.send_json_response(500, {
                     "error": "Deep research failed",
@@ -371,8 +344,8 @@ class handler(BaseHTTPRequestHandler):
             user_message = 'Context from archives:\n\n' + context + '\n\nQuestion: ' + query
             
             message = anthropic_client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=2048,
+                model="claude-opus-4-5-20251101",
+                max_tokens=8192,
                 system=system_prompt,
                 messages=[
                     {
