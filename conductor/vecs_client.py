@@ -75,10 +75,20 @@ def _convert_to_pooler_url(db_url: str) -> str:
     return pooler_url
 
 
+def _get_database_url():
+    """Get database URL from environment, checking multiple variable names."""
+    for var_name in ['DATABASE_URL', 'POSTGRES_URL', 'POSTGRES_PRISMA_URL', 'POSTGRES_URL_NON_POOLING']:
+        url = os.environ.get(var_name)
+        if url:
+            logger.info(f"Using database URL from {var_name}")
+            return url
+    return None
+
+
 def _get_vecs_client():
     """Get or create vecs client (singleton)."""
     global _vecs_client
-    
+
     if _vecs_client is None:
         try:
             import vecs
@@ -86,13 +96,13 @@ def _get_vecs_client():
             raise ImportError(
                 "vecs is not installed. Install with: pip install vecs"
             )
-        
-        # Get database connection string from environment
-        db_connection = os.environ.get('DATABASE_URL')
+
+        # Get database connection string from environment (check multiple variable names)
+        db_connection = _get_database_url()
         if not db_connection:
             raise ValueError(
-                "DATABASE_URL environment variable is required for Supabase vecs. "
-                "Set it to your Supabase Postgres connection string."
+                "Database URL environment variable is required for Supabase vecs. "
+                "Set DATABASE_URL, POSTGRES_URL, or POSTGRES_PRISMA_URL."
             )
         
         # Convert to pooler URL for serverless/Vercel (Context7 best practice)
@@ -181,10 +191,10 @@ def query_vecs(
             import psycopg
             from urllib.parse import urlparse
             import json
-            
-            db_url = os.environ.get('DATABASE_URL')
+
+            db_url = _get_database_url()
             if not db_url:
-                raise ValueError("DATABASE_URL not set")
+                raise ValueError("Database URL not set")
             
             # Convert to pooler URL for serverless/Vercel (Context7 best practice)
             if os.environ.get('VERCEL') or os.environ.get('VERCEL_ENV'):

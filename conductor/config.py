@@ -22,6 +22,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def _get_database_url():
+    """Get database URL from environment, checking multiple variable names."""
+    # Check multiple common environment variable names for database URL
+    for var_name in ['DATABASE_URL', 'POSTGRES_URL', 'POSTGRES_PRISMA_URL', 'POSTGRES_URL_NON_POOLING']:
+        url = os.environ.get(var_name)
+        if url:
+            return url
+    return None
+
+
 def _get_use_vecs():
     """Determine if we should use Supabase vecs (pgvector) or ChromaDB."""
     # #region agent log
@@ -31,8 +41,8 @@ def _get_use_vecs():
     except: pass
     # #endregion
     try:
-        # Use vecs if DATABASE_URL is set (Supabase deployment)
-        database_url = os.environ.get('DATABASE_URL')
+        # Use vecs if any database URL is set (Supabase deployment)
+        database_url = _get_database_url()
         result = bool(database_url)
         # #region agent log
         try:
@@ -105,4 +115,5 @@ CHROMADB_URL = os.environ.get('CHROMADB_URL', None)
 
 # Supabase DATABASE_URL (for vecs/pgvector)
 # Used when USE_VECS is True
-DATABASE_URL = os.environ.get('DATABASE_URL', None)
+# Check multiple environment variable names for flexibility
+DATABASE_URL = _get_database_url()
