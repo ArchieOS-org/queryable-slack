@@ -235,9 +235,10 @@ class handler(BaseHTTPRequestHandler):
                 return
             
             # Import at runtime to avoid cold start issues
-            from conductor.supabase_query import query_vector_similarity
+            from conductor.supabase_query import query_vector_similarity, query_hybrid_search
             from anthropic import Anthropic
             from openai import OpenAI
+            import re
             
             anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
             ai_gateway_key = os.getenv("AI_GATEWAY_API_KEY", "").strip()
@@ -279,13 +280,40 @@ class handler(BaseHTTPRequestHandler):
                 })
                 return
             
-            # Step 2: Query Supabase vector search (increased results for better coverage)
+            # Step 2: Extract potential search keywords from query
+            # Look for addresses, specific identifiers, or quoted terms
+            search_text = None
+
+            # Check for address patterns (numbers followed by words)
+            address_pattern = r'\b\d+\s+[A-Za-z]+(?:\s+[A-Za-z]+)*(?:\s+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Crt|Court|Cr|Crescent|Way|Circle|Pl|Place))?\b'
+            address_match = re.search(address_pattern, query, re.IGNORECASE)
+            if address_match:
+                search_text = address_match.group(0)
+
+            # Also check for quoted terms
+            if not search_text:
+                quoted_match = re.search(r'"([^"]+)"', query)
+                if quoted_match:
+                    search_text = quoted_match.group(1)
+
+            # Step 3: Query Supabase using hybrid search for better coverage
             try:
-                results = query_vector_similarity(
-                    query_embedding=query_embedding,
-                    match_threshold=0.0,
-                    match_count=20  # Increased from 5 to 20 for better coverage
-                )
+                if search_text:
+                    # Use hybrid search when we have a specific search term
+                    results = query_hybrid_search(
+                        query_embedding=query_embedding,
+                        search_text=search_text,
+                        match_threshold=0.0,
+                        match_count=20,
+                        keyword_boost=0.3
+                    )
+                else:
+                    # Fall back to pure vector similarity
+                    results = query_vector_similarity(
+                        query_embedding=query_embedding,
+                        match_threshold=0.0,
+                        match_count=20
+                    )
             except Exception as search_error:
                 self.send_json_response(500, {
                     "error": "Deep research failed",
@@ -293,7 +321,7 @@ class handler(BaseHTTPRequestHandler):
                 })
                 return
             
-            # Step 3: Check if we got results
+            # Step 4: Check if we got results
             if not results.get('documents') or not results['documents'][0]:
                 self.send_json_response(200, {
                     "answer": "No relevant sessions found in the database.",
@@ -302,7 +330,7 @@ class handler(BaseHTTPRequestHandler):
                 })
                 return
             
-            # Step 4: Format context for Claude
+            # Step 5: Format context for Claude
             context_parts = []
             sources = []
             
@@ -329,7 +357,7 @@ class handler(BaseHTTPRequestHandler):
             
             context = "\n".join(context_parts)
             
-            # Step 5: Query Claude with multimodal-aware system prompt
+            # Step 6: Query Claude with multimodal-aware system prompt
             anthropic_client = Anthropic(api_key=anthropic_key)
 
             # Import the multimodal-aware system prompt
