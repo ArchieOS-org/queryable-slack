@@ -41,8 +41,13 @@ export async function POST(req: Request) {
     const query = lastMessage.content;
     console.log('[' + requestId + '] Query: "' + query + '"');
 
-    const apiUrl = new URL('/api/index', req.url);
-    console.log('[' + requestId + '] Fetching from: ' + apiUrl.toString());
+    // Build API URL properly for Vercel deployment
+    // VERCEL_URL is the deployment URL (without protocol)
+    // In production, we need to construct the full URL ourselves
+    const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+    const host = process.env.VERCEL_URL || req.headers.get('host') || 'localhost:3000';
+    const apiUrl = `${protocol}://${host}/api/index`;
+    console.log('[' + requestId + '] Fetching from: ' + apiUrl);
 
     // Include Vercel deployment protection bypass header (free tier)
     const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
@@ -55,7 +60,7 @@ export async function POST(req: Request) {
       console.log('[' + requestId + '] Using deployment protection bypass');
     }
 
-    const response = await fetch(apiUrl.toString(), {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({

@@ -1,5 +1,5 @@
-import { Chat } from "@/components/chat";
+import { EveryAvenueChat } from '@/components/every-avenue-chat';
 
-export default async function Page() {
-  return <Chat />;
+export default function Home() {
+  return <EveryAvenueChat />;
 }

@@ -1,3 +1,14 @@
+/**
+ * DEPRECATED: This chat component is NOT in use.
+ * The application uses EveryAvenueChat (every-avenue-chat.tsx) instead.
+ *
+ * Keeping for reference - this version uses @ai-sdk/react useChat hook
+ * with streaming messages and chat history.
+ *
+ * @deprecated Use EveryAvenueChat for the single-query interface
+ */
+
+/*
 "use client";
 
 import { useChat } from "@ai-sdk/react";
@@ -192,3 +203,4 @@ export function Chat() {
     </div>
   );
 }
+*/
