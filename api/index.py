@@ -224,22 +224,26 @@ class handler(BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length).decode('utf-8')
             data = json.loads(body)
-            
+
             query = data.get('query')
             match_count = data.get('match_count', 5)
-            
+
             if not query:
                 self.send_json_response(400, {
                     "error": "Query parameter is required"
                 })
                 return
-            
+
             # Import at runtime to avoid cold start issues
             from conductor.supabase_query import query_vector_similarity, query_hybrid_search
             from conductor.deep_research_query import deep_research_query
+            from conductor.query_classifier import classify_query
             from anthropic import Anthropic
             from openai import OpenAI
             import re
+
+            # Step 0: Classify the query to determine processing mode
+            classification = classify_query(query)
             
             anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
             ai_gateway_key = os.getenv("AI_GATEWAY_API_KEY", "").strip()
@@ -282,13 +286,15 @@ class handler(BaseHTTPRequestHandler):
                 return
             
             # Step 2: Use exhaustive deep research with multi-query + RRF fusion
+            # Pass classification for adaptive parameters (boosted retrieval for analytical queries)
             try:
                 results = deep_research_query(
                     query_text=query,
                     query_embedding=query_embedding,
-                    deep_research_n_results=50,   # 50 per query variation
-                    max_final_results=40,          # 40 after RRF fusion
-                    num_query_variations=7         # 7 diverse queries
+                    deep_research_n_results=50,   # 50 per query variation (boosted to 75 for analytical)
+                    max_final_results=40,          # 40 after RRF fusion (boosted to 60 for analytical)
+                    num_query_variations=7,        # 7 diverse queries (boosted to 10 for analytical)
+                    classification=classification  # Pass classification for adaptive behavior
                 )
             except Exception as search_error:
                 self.send_json_response(500, {
@@ -333,45 +339,69 @@ class handler(BaseHTTPRequestHandler):
             
             context = "\n".join(context_parts)
             
-            # Step 6: Query Claude with multimodal-aware system prompt
+            # Step 6: Query Claude with appropriate system prompt based on classification
             anthropic_client = Anthropic(api_key=anthropic_key)
 
-            # Import the multimodal-aware system prompt
-            from conductor.prompt_refiner import SYSTEM_PROMPT_SEARCH_AGENT
+            # Import system prompts and select based on query classification
+            from conductor.prompt_refiner import (
+                SYSTEM_PROMPT_SEARCH_AGENT,
+                SYSTEM_PROMPT_ANALYTICAL_RESEARCHER,
+            )
 
-            system_prompt = SYSTEM_PROMPT_SEARCH_AGENT
-            
+            # Select analytical prompt for complex queries, search agent for simple factual queries
+            if classification.query_type in ("analytical", "comparative", "behavioral"):
+                system_prompt = SYSTEM_PROMPT_ANALYTICAL_RESEARCHER
+            else:
+                system_prompt = SYSTEM_PROMPT_SEARCH_AGENT
+
             user_message = 'Context from archives:\n\n' + context + '\n\nQuestion: ' + query
-            
-            message = anthropic_client.messages.create(
-                model="claude-opus-4-5-20251101",
-                max_tokens=8192,
-                system=system_prompt,
-                messages=[
+
+            # Build API parameters
+            api_params = {
+                "model": "claude-opus-4-5-20251101",
+                "max_tokens": 16384 if classification.requires_extended_thinking else 8192,
+                "system": system_prompt,
+                "messages": [
                     {
                         "role": "user",
                         "content": user_message,
                     }
                 ],
-            )
-            
-            # Extract answer
+            }
+
+            # Enable extended thinking for analytical queries
+            if classification.requires_extended_thinking:
+                api_params["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": classification.suggested_budget_tokens,
+                }
+
+            message = anthropic_client.messages.create(**api_params)
+
+            # Extract answer (handle both regular text and thinking blocks)
             answer = ""
             if message.content and len(message.content) > 0:
                 text_parts = []
                 for block in message.content:
-                    if hasattr(block, "text"):
+                    # Skip thinking blocks, only include text blocks
+                    if hasattr(block, "text") and block.type == "text":
                         text_parts.append(block.text)
                 answer = "\n".join(text_parts)
             else:
                 answer = "No response from Claude."
             
-            # Return response
+            # Return response with classification metadata
             self.send_json_response(200, {
                 "answer": answer,
                 "sources": sources,
                 "query": query,
-                "retrieval_count": len(documents)
+                "retrieval_count": len(documents),
+                "classification": {
+                    "query_type": classification.query_type,
+                    "extended_thinking": classification.requires_extended_thinking,
+                    "entities_detected": classification.entities_mentioned,
+                    "analysis_dimensions": classification.analysis_dimensions,
+                }
             })
             
         except json.JSONDecodeError:

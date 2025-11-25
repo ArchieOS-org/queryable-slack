@@ -2,13 +2,14 @@
 Deep research query function optimized for Vercel deployment with Supabase.
 
 Implements multi-query generation, hybrid search, and RRF fusion for exhaustive retrieval.
+Now supports adaptive parameters based on query classification.
 """
 
 import os
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from anthropic import Anthropic
-from conductor.multi_query import generate_query_variations
+from conductor.multi_query import generate_query_variations, generate_entity_focused_variations
 from conductor.rank_fusion import fuse_chromadb_results
 from conductor.supabase_query import query_vector_similarity
 
@@ -20,12 +21,14 @@ def deep_research_query(
     query_embedding: List[float],
     deep_research_n_results: int = 50,
     max_final_results: int = 40,
-    num_query_variations: int = 7
+    num_query_variations: int = 7,
+    classification: Optional[Any] = None
 ) -> Dict:
     """
     Perform exhaustive deep research using multi-query retrieval and RRF fusion.
 
     This function is optimized for Vercel deployment with Supabase vector search.
+    Supports adaptive parameters based on query classification for analytical queries.
 
     Args:
         query_text: Original user query string
@@ -33,16 +36,47 @@ def deep_research_query(
         deep_research_n_results: Number of results per query variation (default: 50)
         max_final_results: Maximum final results after RRF fusion (default: 40)
         num_query_variations: Number of query variations to generate (default: 7)
+        classification: Optional QueryClassification object from query_classifier
 
     Returns:
         Dictionary with fused query results containing documents, metadatas, distances
     """
+    # Adaptive parameters based on classification
+    is_analytical = False
+    entities = []
+    dimensions = []
+
+    if classification is not None:
+        is_analytical = classification.query_type in ("analytical", "comparative", "behavioral")
+        entities = classification.entities_mentioned
+        dimensions = classification.analysis_dimensions
+
+        # Boost retrieval for analytical queries
+        if is_analytical:
+            deep_research_n_results = max(deep_research_n_results, 75)  # At least 75 per variation
+            max_final_results = max(max_final_results, 60)  # At least 60 final results
+            num_query_variations = max(num_query_variations, 10)  # At least 10 variations
+            logger.info(f"Analytical query detected - boosted params: "
+                        f"n_results={deep_research_n_results}, "
+                        f"final={max_final_results}, "
+                        f"variations={num_query_variations}")
+
     logger.info(f"Starting deep research mode: {query_text[:50]}...")
 
-    # Step 1: Generate query variations
+    # Step 1: Generate query variations (use entity-focused for analytical queries)
     logger.info(f"Step 1/3: Generating {num_query_variations} query variations...")
     try:
-        query_variations = generate_query_variations(query_text, num_variations=num_query_variations)
+        # Use entity-focused generation for analytical queries with detected entities
+        if is_analytical and entities:
+            logger.info(f"Using entity-focused generation for entities: {entities}")
+            query_variations = generate_entity_focused_variations(
+                query_text,
+                entities=entities,
+                dimensions=dimensions,
+                num_variations=num_query_variations
+            )
+        else:
+            query_variations = generate_query_variations(query_text, num_variations=num_query_variations)
         logger.info(f"Generated {len(query_variations)} query variations")
     except Exception as e:
         logger.error(f"Failed to generate query variations: {e}")
