@@ -10,7 +10,7 @@ Best practices:
 
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, field_validator, ValidationInfo, ValidationError
+from pydantic import BaseModel, Field, field_validator, ValidationInfo, ValidationError
 
 
 class UserMap(BaseModel):
@@ -81,6 +81,46 @@ class Session(BaseModel):
         if v not in ("channel", "dm", "mpim"):
             raise ValueError(f"conversation_type must be 'channel', 'dm', or 'mpim', got '{v}'")
         return v
+
+
+class EnhancedVectorMetadata(BaseModel):
+    """
+    Enhanced metadata schema for entity-aware vector storage.
+
+    Supports:
+    - Original session metadata (date, channel, times)
+    - Entity extraction results (person_mentions, address_mentions, etc.)
+    - Chunking metadata for message-level retrieval
+    """
+
+    # Required session metadata
+    date: str  # ISO date string (YYYY-MM-DD)
+    channel: str  # Channel or conversation name
+    start_time: str  # ISO timestamp
+    end_time: str  # ISO timestamp
+    message_count: int  # Number of messages in session/chunk
+    file_count: int  # Number of files in session/chunk
+
+    # Entity extraction results (using Field default_factory for mutable defaults)
+    entities: Dict[str, List[str]] = Field(default_factory=dict)
+    person_mentions: List[str] = Field(default_factory=list)
+    address_mentions: List[str] = Field(default_factory=list)
+    deal_mentions: List[str] = Field(default_factory=list)
+    company_mentions: List[str] = Field(default_factory=list)
+    price_mentions: List[str] = Field(default_factory=list)
+
+    # Chunking metadata
+    parent_session_id: Optional[str] = None  # ID of parent session (if this is a chunk)
+    chunk_index: Optional[int] = None  # Position in parent session (0-indexed)
+    is_chunk: bool = False  # True if this is a message-level chunk
+
+    # Conversation metadata
+    conversation_type: Optional[str] = None  # "channel", "dm", "mpim"
+
+    class Config:
+        """Pydantic v2 config."""
+
+        extra = "allow"  # Allow extra fields for forward compatibility
 
 
 class VectorRecord(BaseModel):

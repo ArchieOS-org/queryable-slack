@@ -19,6 +19,12 @@ from conductor.file_parser import extract_text_from_file
 from conductor.models import Session, SlackMessage, UserMap
 from conductor.processor import load_messages_from_directory, sessionize_messages
 from conductor.user_mapper import load_users
+from conductor.entity_extractor import (
+    extract_entities,
+    group_entities_by_type,
+    get_entity_list,
+)
+from conductor.chunker import chunk_session, chunk_to_metadata
 
 logging.basicConfig(
     level=logging.INFO,
@@ -233,13 +239,87 @@ def enrich_session_with_files(
     )
 
 
-def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = Path("./conductor_db")) -> None:
+def extract_session_entities(session: Session, use_llm: bool = False) -> Dict[str, any]:
     """
-    Store sessions in ChromaDB for vector search.
+    Extract entities from a session and return metadata-compatible dict.
+
+    ChromaDB only supports flat metadata (no arrays), so entities are
+    stored as comma-separated strings.
+
+    Args:
+        session: Session to extract entities from
+        use_llm: Whether to use LLM for extraction (slower but more accurate)
+
+    Returns:
+        Dictionary with entity metadata fields (CSV strings)
+    """
+    try:
+        # Extract entities from enriched transcript
+        text = session.enriched_transcript or session.transcript
+        result = extract_entities(text, use_llm=use_llm)
+
+        # Group entities by type
+        grouped = group_entities_by_type(result.entities)
+
+        # Convert to CSV strings for ChromaDB compatibility
+        person_mentions = ",".join(get_entity_list(result.entities, "PERSON"))
+        address_mentions = ",".join(get_entity_list(result.entities, "ADDRESS"))
+        deal_mentions = ",".join(get_entity_list(result.entities, "DEAL"))
+        company_mentions = ",".join(get_entity_list(result.entities, "COMPANY"))
+        price_mentions = ",".join(get_entity_list(result.entities, "PRICE"))
+
+        # Create entities CSV (TYPE:value format)
+        entities_parts = []
+        for entity_type, values in grouped.items():
+            for value in values:
+                entities_parts.append(f"{entity_type}:{value}")
+        entities_csv = ",".join(entities_parts)
+
+        logger.debug(
+            f"Extracted {len(result.entities)} entities from session {session.session_id}"
+        )
+
+        return {
+            "entities": entities_csv,
+            "person_mentions": person_mentions,
+            "address_mentions": address_mentions,
+            "deal_mentions": deal_mentions,
+            "company_mentions": company_mentions,
+            "price_mentions": price_mentions,
+            "is_chunk": False,
+        }
+
+    except Exception as e:
+        logger.warning(f"Entity extraction failed for session {session.session_id}: {e}")
+        return {
+            "entities": "",
+            "person_mentions": "",
+            "address_mentions": "",
+            "deal_mentions": "",
+            "company_mentions": "",
+            "price_mentions": "",
+            "is_chunk": False,
+        }
+
+
+def store_sessions_in_chromadb(
+    sessions: List[Session],
+    db_path: Path = Path("./conductor_db"),
+    extract_entities_flag: bool = True,
+    use_llm_extraction: bool = False,
+    create_chunks: bool = False,
+    batch_size: int = 100,
+) -> None:
+    """
+    Store sessions in ChromaDB for vector search with optional entity extraction.
 
     Args:
         sessions: List of Session objects to store
         db_path: Path to ChromaDB persistent storage directory
+        extract_entities_flag: Whether to extract entities from sessions
+        use_llm_extraction: Whether to use LLM for entity extraction
+        create_chunks: Whether to also create message-level chunks
+        batch_size: Number of records per batch for upsert
     """
     if not sessions:
         logger.info("No sessions to store")
@@ -261,24 +341,62 @@ def store_sessions_in_chromadb(sessions: List[Session], db_path: Path = Path("./
         metadatas = []
 
         for session in sessions:
+            # Base metadata
+            base_metadata = {
+                "date": session.start_time.date().isoformat(),
+                "channel": session.channel_name,
+                "start_time": session.start_time.isoformat(),
+                "end_time": session.end_time.isoformat(),
+                "message_count": session.message_count,
+                "file_count": session.file_count,
+                "conversation_type": session.conversation_type,
+            }
+
+            # Extract entities if requested
+            if extract_entities_flag:
+                entity_metadata = extract_session_entities(
+                    session, use_llm=use_llm_extraction
+                )
+                base_metadata.update(entity_metadata)
+            else:
+                base_metadata["is_chunk"] = False
+
             ids.append(session.session_id)
             documents.append(session.enriched_transcript)
-            metadatas.append(
-                {
-                    "date": session.start_time.date().isoformat(),
-                    "channel": session.channel_name,
-                    "start_time": session.start_time.isoformat(),
-                    "end_time": session.end_time.isoformat(),
-                    "message_count": session.message_count,
-                    "file_count": session.file_count,
-                    "conversation_type": session.conversation_type,
-                }
+            metadatas.append(base_metadata)
+
+            # Create message-level chunks if requested
+            if create_chunks:
+                chunks = chunk_session(
+                    session,
+                    strategy="messages",
+                    messages_per_chunk=5,
+                    extract_entities_flag=extract_entities_flag,
+                )
+                for chunk in chunks:
+                    chunk_metadata = chunk_to_metadata(chunk, base_metadata)
+                    ids.append(chunk.chunk_id)
+                    documents.append(chunk.text)
+                    metadatas.append(chunk_metadata)
+
+        # Batch upsert to ChromaDB (idempotent)
+        total = len(ids)
+        for i in range(0, total, batch_size):
+            batch_ids = ids[i : i + batch_size]
+            batch_docs = documents[i : i + batch_size]
+            batch_meta = metadatas[i : i + batch_size]
+
+            collection.upsert(
+                ids=batch_ids, documents=batch_docs, metadatas=batch_meta
             )
+            logger.info(f"Upserted batch {i // batch_size + 1}: {len(batch_ids)} records")
 
-        # Upsert to ChromaDB (idempotent)
-        collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
-
-        logger.info(f"Stored {len(sessions)} sessions in ChromaDB at {db_path}")
+        chunk_count = total - len(sessions) if create_chunks else 0
+        logger.info(
+            f"Stored {len(sessions)} sessions"
+            + (f" and {chunk_count} chunks" if create_chunks else "")
+            + f" in ChromaDB at {db_path}"
+        )
 
     except Exception as e:
         logger.exception(f"Failed to store sessions in ChromaDB: {e}")

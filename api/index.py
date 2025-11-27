@@ -30,12 +30,20 @@ class handler(BaseHTTPRequestHandler):
             if path == '/' or path == '':
                 self.send_json_response(200, {
                     "name": "Conductor API",
-                    "version": "1.0.0",
+                    "version": "2.0.0",
                     "status": "online",
                     "endpoints": {
                         "query": "POST /api/query",
                         "health": "GET /api/health",
                         "sessions": "GET /api/sessions"
+                    },
+                    "query_parameters": {
+                        "query": "Required - The search query text",
+                        "match_count": "Optional - Number of results (default: 5)",
+                        "person": "Optional - Filter by person name",
+                        "address": "Optional - Filter by address",
+                        "channel": "Optional - Filter by channel name",
+                        "use_entity_detection": "Optional - Auto-detect entities (default: true)"
                     }
                 })
                 return
@@ -218,7 +226,7 @@ class handler(BaseHTTPRequestHandler):
             })
     
     def handle_semantic_query(self):
-        """Semantic search endpoint with Claude answer generation"""
+        """Semantic search endpoint with Claude answer generation and entity filtering"""
         try:
             # Read request body
             content_length = int(self.headers.get('Content-Length', 0))
@@ -228,6 +236,12 @@ class handler(BaseHTTPRequestHandler):
             query = data.get('query')
             match_count = data.get('match_count', 5)
 
+            # Entity filtering parameters (optional)
+            filter_person = data.get('person')  # Filter by person name
+            filter_address = data.get('address')  # Filter by address
+            filter_channel = data.get('channel')  # Filter by channel
+            use_entity_detection = data.get('use_entity_detection', True)  # Auto-detect entities
+
             if not query:
                 self.send_json_response(400, {
                     "error": "Query parameter is required"
@@ -235,9 +249,9 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             # Import at runtime to avoid cold start issues
-            from conductor.supabase_query import query_vector_similarity, query_hybrid_search
+            from conductor.supabase_query import query_vector_similarity, query_with_entity_filter
             from conductor.deep_research_query import deep_research_query
-            from conductor.query_classifier import classify_query
+            from conductor.query_classifier import classify_query, extract_entities
             from anthropic import Anthropic
             from openai import OpenAI
             import re
@@ -285,9 +299,34 @@ class handler(BaseHTTPRequestHandler):
                 })
                 return
             
+            # Step 1.5: Auto-detect entities from query if enabled
+            detected_entities = []
+            if use_entity_detection and not filter_person:
+                detected_entities = extract_entities(query)
+                # Use first detected entity as person filter if available
+                if detected_entities and classification.entities_mentioned:
+                    filter_person = classification.entities_mentioned[0]
+
             # Step 2: Use exhaustive deep research with multi-query + RRF fusion
             # Pass classification for adaptive parameters (boosted retrieval for analytical queries)
             try:
+                # If entity filters provided, use entity-filtered search first
+                entity_filtered_results = None
+                if filter_person or filter_address or filter_channel:
+                    try:
+                        entity_filtered_results = query_with_entity_filter(
+                            query_embedding=query_embedding,
+                            match_threshold=0.0,
+                            match_count=match_count * 2,  # Get more for entity filtering
+                            person=filter_person,
+                            address=filter_address,
+                            channel=filter_channel,
+                        )
+                    except Exception as entity_err:
+                        # Fall back to regular search if entity search fails
+                        pass
+
+                # Use deep research for comprehensive results
                 results = deep_research_query(
                     query_text=query,
                     query_embedding=query_embedding,
@@ -296,6 +335,27 @@ class handler(BaseHTTPRequestHandler):
                     num_query_variations=7,        # 7 diverse queries (boosted to 10 for analytical)
                     classification=classification  # Pass classification for adaptive behavior
                 )
+
+                # Merge entity-filtered results with deep research results
+                if entity_filtered_results and entity_filtered_results.get('ids', [[]])[0]:
+                    # Prepend entity-filtered results (higher priority)
+                    merged_ids = entity_filtered_results['ids'][0] + results.get('ids', [[]])[0]
+                    merged_docs = entity_filtered_results['documents'][0] + results.get('documents', [[]])[0]
+                    merged_meta = entity_filtered_results['metadatas'][0] + results.get('metadatas', [[]])[0]
+                    merged_dist = entity_filtered_results['distances'][0] + results.get('distances', [[]])[0]
+
+                    # Deduplicate by ID, keeping first occurrence (entity-filtered)
+                    seen_ids = set()
+                    deduped = {'ids': [[]], 'documents': [[]], 'metadatas': [[]], 'distances': [[]]}
+                    for i, doc_id in enumerate(merged_ids):
+                        if doc_id not in seen_ids:
+                            seen_ids.add(doc_id)
+                            deduped['ids'][0].append(doc_id)
+                            deduped['documents'][0].append(merged_docs[i])
+                            deduped['metadatas'][0].append(merged_meta[i])
+                            deduped['distances'][0].append(merged_dist[i])
+                    results = deduped
+
             except Exception as search_error:
                 self.send_json_response(500, {
                     "error": "Deep research failed",
@@ -390,7 +450,7 @@ class handler(BaseHTTPRequestHandler):
             else:
                 answer = "No response from Claude."
             
-            # Return response with classification metadata
+            # Return response with classification and entity filtering metadata
             self.send_json_response(200, {
                 "answer": answer,
                 "sources": sources,
@@ -401,6 +461,12 @@ class handler(BaseHTTPRequestHandler):
                     "extended_thinking": classification.requires_extended_thinking,
                     "entities_detected": classification.entities_mentioned,
                     "analysis_dimensions": classification.analysis_dimensions,
+                },
+                "entity_filters": {
+                    "person": filter_person,
+                    "address": filter_address,
+                    "channel": filter_channel,
+                    "auto_detected": detected_entities,
                 }
             })
             
