@@ -219,6 +219,210 @@ def list_recent_sessions(limit: int = 10) -> List[Dict[str, Any]]:
         raise
 
 
+def query_hybrid_search(
+    query_embedding: List[float],
+    search_text: str = None,
+    match_threshold: float = 0.0,
+    match_count: int = 10,
+    keyword_boost: float = 0.3
+) -> Dict[str, Any]:
+    """
+    Hybrid search combining vector similarity with keyword matching.
+
+    This function boosts the similarity score for documents that contain
+    the search text, which is especially useful for finding documents
+    with specific identifiers (addresses, names, IDs) that may have
+    low semantic similarity but are exact matches.
+
+    Args:
+        query_embedding: The embedding vector to search for
+        search_text: Optional text to search for (keyword matching)
+        match_threshold: Minimum similarity threshold (default 0.0)
+        match_count: Number of results to return (default 10)
+        keyword_boost: Amount to boost similarity for keyword matches (default 0.3)
+
+    Returns:
+        Dictionary with query results in ChromaDB-compatible format
+    """
+    try:
+        client = get_supabase_client()
+
+        # Prepare RPC parameters
+        rpc_params = {
+            'query_embedding': query_embedding,
+            'match_threshold': match_threshold,
+            'match_count': match_count,
+            'keyword_boost': keyword_boost
+        }
+
+        if search_text:
+            rpc_params['search_text'] = search_text
+
+        result = client.rpc('hybrid_search_conductor_sessions', rpc_params).execute()
+
+        # Parse results into ChromaDB-compatible format
+        if result.data:
+            ids = []
+            documents = []
+            metadatas = []
+            distances = []
+            keyword_matches = []
+
+            for row in result.data:
+                ids.append(row['id'])
+
+                metadata = row.get('metadata', {})
+                doc_text = metadata.get('document', row['id'])
+                documents.append(doc_text)
+                metadatas.append(metadata)
+
+                similarity = row.get('similarity', 0.0)
+                distance = 1.0 - similarity
+                distances.append(distance)
+
+                keyword_matches.append(row.get('keyword_match', False))
+
+            logger.info(f"Hybrid search found {len(ids)} results, {sum(keyword_matches)} with keyword matches")
+            return {
+                'ids': [ids],
+                'documents': [documents],
+                'metadatas': [metadatas],
+                'distances': [distances],
+                'keyword_matches': [keyword_matches]
+            }
+        else:
+            logger.warning("No results found from hybrid search")
+            return {
+                'ids': [[]],
+                'documents': [[]],
+                'metadatas': [[]],
+                'distances': [[]],
+                'keyword_matches': [[]]
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to perform hybrid search: {e}")
+        raise
+
+
+def query_with_entity_filter(
+    query_embedding: List[float],
+    match_threshold: float = 0.0,
+    match_count: int = 5,
+    person: Optional[str] = None,
+    address: Optional[str] = None,
+    channel: Optional[str] = None,
+    is_chunk: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """
+    Query Supabase with entity-based filtering.
+
+    Combines vector similarity search with metadata filtering on entity fields.
+    Uses JSONB containment queries for efficient entity matching.
+
+    Args:
+        query_embedding: The embedding vector to search for
+        match_threshold: Minimum similarity threshold (0.0 to 1.0)
+        match_count: Number of results to return
+        person: Filter by person name (searches person_mentions field)
+        address: Filter by address (searches address_mentions field)
+        channel: Filter by channel name
+        is_chunk: Filter by chunk status (True for chunks only, False for sessions only)
+
+    Returns:
+        Dictionary with query results in ChromaDB-compatible format
+    """
+    try:
+        client = get_supabase_client()
+
+        # First, get results from vector similarity search
+        rpc_params = {
+            'query_embedding': query_embedding,
+            'match_threshold': match_threshold,
+            'match_count': match_count * 3,  # Get more results to filter down
+        }
+
+        result = client.rpc('match_conductor_sessions', rpc_params).execute()
+
+        if not result.data:
+            return {
+                'ids': [[]],
+                'documents': [[]],
+                'metadatas': [[]],
+                'distances': [[]]
+            }
+
+        # Apply entity filters in Python (post-filtering)
+        filtered_results = []
+        for row in result.data:
+            metadata = row.get('metadata', {})
+
+            # Apply channel filter
+            if channel and metadata.get('channel', '').lower() != channel.lower():
+                continue
+
+            # Apply person filter (case-insensitive substring match)
+            if person:
+                person_mentions = metadata.get('person_mentions', '')
+                if person.lower() not in person_mentions.lower():
+                    # Also check document text
+                    doc_text = metadata.get('document', '')
+                    if person.lower() not in doc_text.lower():
+                        continue
+
+            # Apply address filter (case-insensitive substring match)
+            if address:
+                address_mentions = metadata.get('address_mentions', '')
+                if address.lower() not in address_mentions.lower():
+                    # Also check document text
+                    doc_text = metadata.get('document', '')
+                    if address.lower() not in doc_text.lower():
+                        continue
+
+            # Apply is_chunk filter
+            if is_chunk is not None:
+                if metadata.get('is_chunk', False) != is_chunk:
+                    continue
+
+            filtered_results.append(row)
+
+            # Stop once we have enough results
+            if len(filtered_results) >= match_count:
+                break
+
+        # Parse filtered results into ChromaDB-compatible format
+        ids = []
+        documents = []
+        metadatas = []
+        distances = []
+
+        for row in filtered_results:
+            ids.append(row['id'])
+            metadata = row.get('metadata', {})
+            doc_text = metadata.get('document', row['id'])
+            documents.append(doc_text)
+            metadatas.append(metadata)
+            similarity = row.get('similarity', 0.0)
+            distance = 1.0 - similarity
+            distances.append(distance)
+
+        logger.info(
+            f"Entity-filtered search: {len(ids)} results "
+            f"(person={person}, address={address}, channel={channel})"
+        )
+
+        return {
+            'ids': [ids],
+            'documents': [documents],
+            'metadatas': [metadatas],
+            'distances': [distances]
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to query with entity filter: {e}")
+        raise
+
+
 def get_sessions_by_channel(channel_name: str, limit: int = 10) -> List[Dict[str, Any]]:
     """
     Retrieve sessions from a specific Slack channel.

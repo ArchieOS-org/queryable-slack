@@ -1,0 +1,414 @@
+@import "tailwindcss";
+
+/* CSS Variables for elegant theming */
+:root {
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --border: #e5e5e5;
+  --primary: #1a1a1a;
+  --primary-foreground: #ffffff;
+  --accent: #f0f0f0;
+  --accent-foreground: #1a1a1a;
+  --destructive: #dc2626;
+  --radius: 16px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
+}
+
+.dark {
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --muted: #171717;
+  --muted-foreground: #a3a3a3;
+  --border: #262626;
+  --primary: #fafafa;
+  --primary-foreground: #0a0a0a;
+  --accent: #1f1f1f;
+  --accent-foreground: #fafafa;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Base styles */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  min-height: 100%;
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+/* Smooth scrolling */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Selection styling */
+::selection {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-foreground);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes typing {
+  0% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.3;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.5s ease-out forwards;
+}
+
+.animate-slide-down {
+  animation: slideDown 0.5s ease-out forwards;
+}
+
+.animate-pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Typing indicator dots */
+.typing-dot {
+  animation: typing 1.4s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* Glass effect */
+.glass {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.dark .glass {
+  background: rgba(26, 26, 26, 0.8);
+}
+
+/* Message bubbles */
+.message-user {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-radius: 20px 20px 4px 20px;
+}
+
+.message-assistant {
+  background: var(--muted);
+  color: var(--foreground);
+  border-radius: 20px 20px 20px 4px;
+}
+
+/* Input focus ring */
+.focus-ring {
+  outline: none;
+  transition: box-shadow 0.2s ease;
+}
+
+.focus-ring:focus {
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--primary);
+}
+
+/* Prose styling for markdown content */
+.prose {
+  line-height: 1.7;
+  max-width: 100%;
+  color: var(--foreground);
+}
+
+.prose p {
+  margin-bottom: 1em;
+}
+
+.prose p:last-child {
+  margin-bottom: 0;
+}
+
+.prose strong {
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.prose em {
+  font-style: italic;
+}
+
+.prose ul, .prose ol {
+  margin-left: 1.5em;
+  margin-bottom: 1em;
+}
+
+.prose ul {
+  list-style-type: disc;
+}
+
+.prose ol {
+  list-style-type: decimal;
+}
+
+.prose li {
+  margin-bottom: 0.5em;
+}
+
+.prose li > ul, .prose li > ol {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+/* Heading hierarchy */
+.prose h1, .prose h2, .prose h3, .prose h4 {
+  font-weight: 600;
+  color: var(--foreground);
+  line-height: 1.3;
+}
+
+.prose h1 {
+  font-size: 1.5em;
+  margin-top: 0;
+  margin-bottom: 1em;
+}
+
+.prose h1:not(:first-child) {
+  margin-top: 2em;
+}
+
+.prose h2 {
+  font-size: 1.25em;
+  margin-top: 1.75em;
+  margin-bottom: 0.75em;
+}
+
+.prose h3 {
+  font-size: 1.1em;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.prose h4 {
+  font-size: 1em;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+}
+
+/* Code styling */
+.prose code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.875em;
+  background: var(--muted);
+  color: var(--foreground);
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+}
+
+.prose pre {
+  background: var(--muted);
+  padding: 1em;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin-bottom: 1em;
+}
+
+.prose pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.875em;
+}
+
+/* Blockquotes */
+.prose blockquote {
+  border-left: 4px solid var(--border);
+  padding-left: 1em;
+  margin: 1.5em 0;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.prose blockquote p {
+  margin-bottom: 0.5em;
+}
+
+.prose blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* Horizontal rules */
+.prose hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2em 0;
+}
+
+/* Tables */
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5em 0;
+  font-size: 0.9em;
+}
+
+.prose th, .prose td {
+  border: 1px solid var(--border);
+  padding: 0.75em 1em;
+  text-align: left;
+}
+
+.prose th {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+.prose tr:hover {
+  background: var(--muted);
+}
+
+/* Links */
+.prose a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.prose a:hover {
+  opacity: 0.8;
+}
+
+/* Task lists (GFM) */
+.prose input[type="checkbox"] {
+  margin-right: 0.5em;
+  accent-color: var(--primary);
+}
+
+/* Images */
+.prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+
+/* Definition lists */
+.prose dl {
+  margin: 1em 0;
+}
+
+.prose dt {
+  font-weight: 600;
+  margin-top: 1em;
+}
+
+.prose dd {
+  margin-left: 1.5em;
+  margin-top: 0.25em;
+}
+
+/* Safe area insets for mobile */
+@supports (padding-top: env(safe-area-inset-top)) {
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+}
+
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Touch-friendly sizing on mobile */
+@media (max-width: 640px) {
+  button, input, textarea {
+    font-size: 16px !important; /* Prevents iOS zoom on focus */
+  }
+}
